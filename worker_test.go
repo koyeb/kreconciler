@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
+	"sync"
 	"testing"
 	"time"
 )
@@ -93,8 +94,13 @@ func TestWorker(t *testing.T) {
 			tt.mock(mockHandler)
 
 			worker := newWorker(obs, 0, tt.capacity, tt.maxRetries, mockHandler)
+			wg := sync.WaitGroup{}
 
-			go worker.Run(ctx)
+			go func() {
+				wg.Add(1)
+				defer wg.Done()
+				worker.Run(ctx)
+			}()
 
 			for _, action := range tt.actions {
 				time.Sleep(action.sleepBefore)
@@ -103,6 +109,7 @@ func TestWorker(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond * 200)
 			done()
+			wg.Wait()
 
 			tt.assert(t, mockHandler)
 		})
