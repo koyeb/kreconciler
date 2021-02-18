@@ -67,7 +67,7 @@ func TestReconciler(t *testing.T) {
 					ctx, done := context.WithCancel(context.Background())
 
 					conf := tt.conf
-					if conf.WorkerCapacity == 0 {
+					if conf.WorkerQueueSize == 0 {
 						conf = DefaultConfig()
 					}
 					conf.WorkerHasher = DefaultHasher{Num: uint32(count)}
