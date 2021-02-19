@@ -9,6 +9,7 @@ import (
 
 type Controller interface {
 	Run(ctx context.Context) error
+	BecomeLeader()
 }
 
 type controller struct {
@@ -19,6 +20,11 @@ type controller struct {
 	eventStreams    []EventStream
 	streamWaitGroup sync.WaitGroup
 	workerWaitGroup sync.WaitGroup
+	isLeader        chan struct{}
+}
+
+func (c *controller) BecomeLeader() {
+	c.isLeader <- struct{}{}
 }
 
 func New(obs observability.Wrapper, config Config, handler Handler, streams ...EventStream) Controller {
@@ -27,10 +33,14 @@ func New(obs observability.Wrapper, config Config, handler Handler, streams ...E
 		cfg:          config,
 		handler:      handler,
 		eventStreams: streams,
+		isLeader:     make(chan struct{}, 1),
 	}
 }
 
 func (c *controller) Run(ctx context.Context) error {
+	if !c.cfg.LeaderElectionEnabled {
+		c.isLeader <- struct{}{}
+	}
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
 	for i := 0; i < c.cfg.WorkerHasher.Count(); i++ {
@@ -42,22 +52,28 @@ func (c *controller) Run(ctx context.Context) error {
 			worker.Run(workersCtx)
 		}()
 	}
-	// Run streams subscribers
 	streamCtx, cancelStream := context.WithCancel(ctx)
-	for _, stream := range c.eventStreams {
-		stream := stream
-		go func() {
-			c.streamWaitGroup.Add(1)
-			defer c.streamWaitGroup.Done()
-			err := stream.Subscribe(streamCtx, EventHandlerFunc(c.enqueue))
-			if err != nil {
-				c.SLog().Errorw("Failed subscribing to stream", "error", err)
-			}
-		}()
+	// Run streams subscribers
+	select {
+	case <-ctx.Done():
+		c.SLog().Info("Context terminated without ever being leader, never start streams.")
+	case <-c.isLeader:
+		c.SLog().Infow("Became leader, starting reconciler")
+		for _, stream := range c.eventStreams {
+			stream := stream
+			go func() {
+				c.streamWaitGroup.Add(1)
+				defer c.streamWaitGroup.Done()
+				err := stream.Subscribe(streamCtx, EventHandlerFunc(c.enqueue))
+				if err != nil {
+					c.SLog().Errorw("Failed subscribing to stream", "error", err)
+				}
+			}()
+		}
+		// Wait until it's finished
+		<-ctx.Done()
 	}
 
-	// Wait until it's finished
-	<-ctx.Done()
 	c.SLog().Infow("stopping controller...")
 	c.SLog().Infow("stopping streams...")
 	cancelStream()

@@ -7,16 +7,18 @@ import (
 )
 
 type Config struct {
-	MaxItemRetries  int
-	WorkerQueueSize int
-	WorkerHasher    WorkerHasher
+	MaxItemRetries        int
+	WorkerQueueSize       int
+	WorkerHasher          WorkerHasher
+	LeaderElectionEnabled bool
 }
 
 func DefaultConfig() Config {
 	return Config{
-		WorkerHasher:    DefaultHasher{Num: 1},
-		MaxItemRetries:  10,
-		WorkerQueueSize: 1000,
+		WorkerHasher:          DefaultHasher{Num: 1},
+		MaxItemRetries:        10,
+		WorkerQueueSize:       1000,
+		LeaderElectionEnabled: true,
 	}
 }
 

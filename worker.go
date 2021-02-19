@@ -5,8 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
+	"github.com/stretchr/testify/mock"
 	"sync"
 )
+
+type handlerMock struct {
+	mock.Mock
+}
+
+func (h *handlerMock) Handle(_ context.Context, id string) Result {
+	res := h.Called(id)
+	return res.Get(0).(Result)
+}
 
 type worker struct {
 	observability.Wrapper

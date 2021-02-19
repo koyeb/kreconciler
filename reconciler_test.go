@@ -5,20 +5,35 @@ import (
 	"fmt"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
 	"time"
 )
 
-type handlerMock struct {
-	mock.Mock
+type countingHandler struct {
+	sync.Mutex
+	calls map[string]int
 }
 
-func (h *handlerMock) Handle(_ context.Context, id string) Result {
-	res := h.Called(id)
-	return res.Get(0).(Result)
+func (h *countingHandler) Handle(ctx context.Context, id string) Result {
+	h.Lock()
+	defer h.Unlock()
+	if h.calls == nil {
+		h.calls = map[string]int{}
+	}
+	h.calls[id] += 1
+	return Result{}
+}
+
+func (h *countingHandler) Calls() map[string]int {
+	h.Lock()
+	defer h.Unlock()
+	res := make(map[string]int, len(h.calls))
+	for k, v := range h.calls {
+		res[k] = v
+	}
+	return res
 }
 
 func TestReconciler(t *testing.T) {
@@ -33,9 +48,9 @@ func TestReconciler(t *testing.T) {
 					handler.Handle("a")
 					handler.Handle("b")
 					handler.Handle("c")
-					time.Sleep(time.Millisecond * 200)
+					time.Sleep(time.Millisecond * 20)
 					handler.Handle("c")
-					time.Sleep(time.Millisecond * 100)
+					time.Sleep(time.Millisecond * 10)
 					done()
 					return nil
 				}
@@ -56,37 +71,66 @@ func TestReconciler(t *testing.T) {
 			for _, count := range []int{1, 2, 4} {
 				t.Run(fmt.Sprintf("With %d workers", count), func(t *testing.T) {
 					obs := observability.NewForTest(t)
-					handlerCalls := map[string]int{}
-					m := sync.Mutex{}
-					handler := HandlerFunc(func(ctx context.Context, id string) Result {
-						m.Lock()
-						defer m.Unlock()
-						handlerCalls[id] += 1
-						return Result{}
-					})
+					handler := countingHandler{}
 					ctx, done := context.WithCancel(context.Background())
 
 					conf := tt.conf
 					if conf.WorkerQueueSize == 0 {
 						conf = DefaultConfig()
 					}
+					conf.LeaderElectionEnabled = false
 					conf.WorkerHasher = DefaultHasher{Num: uint32(count)}
-					c := New(obs, conf, handler, tt.scenario(done))
+					c := New(obs, conf, &handler, tt.scenario(done))
 					require.NoError(t, c.Run(ctx))
 
-					m.Lock()
-					defer m.Unlock()
-					tt.assert(t, c.(*controller), handlerCalls)
+					tt.assert(t, c.(*controller), handler.Calls())
 				})
 			}
 		})
 	}
+}
 
+func TestReconcilerWithLock(t *testing.T) {
+	obs := observability.NewForTest(t)
+	handler := &countingHandler{}
+
+	conf := DefaultConfig()
+	ctx, done := context.WithCancel(context.Background())
+	c := New(obs, conf, handler, EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+		handler.Handle("a")
+		handler.Handle("b")
+		handler.Handle("c")
+		time.Sleep(time.Millisecond * 20)
+		handler.Handle("c")
+		time.Sleep(time.Millisecond * 10)
+		done()
+		return nil
+	}))
+	wg := sync.WaitGroup{}
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		c.Run(ctx)
+	}()
+
+	time.Sleep(time.Millisecond * 50)
+	assert.Empty(t, handler.Calls())
+
+	// Now we're leader
+	c.BecomeLeader()
+
+	wg.Wait()
+
+	assert.Equal(t, map[string]int{
+		"a": 1,
+		"b": 1,
+		"c": 2,
+	}, handler.Calls())
 }
 
 func TestResyncLoopEventStream(t *testing.T) {
 	obs := observability.NewForTest(t)
-	stream := ResyncLoopEventStream(obs, time.Millisecond*100, func(ctx context.Context) ([]string, error) {
+	stream := ResyncLoopEventStream(obs, time.Millisecond*50, func(ctx context.Context) ([]string, error) {
 		return []string{"a", "b", "c"}, nil
 	})
 	idChannel := make(chan string, 10)
@@ -102,14 +146,14 @@ func TestResyncLoopEventStream(t *testing.T) {
 	}
 	assert.Empty(t, idChannel)
 
-	time.Sleep(time.Millisecond * 110)
+	time.Sleep(time.Millisecond * 60)
 	for _, v := range []string{"a", "b", "c"} {
 		rec := <-idChannel
 		assert.Equal(t, v, rec)
 	}
 	assert.Empty(t, idChannel)
 
-	time.Sleep(time.Millisecond * 220)
+	time.Sleep(time.Millisecond * 120)
 	for _, v := range []string{"a", "b", "c", "a", "b", "c"} {
 		rec := <-idChannel
 		assert.Equal(t, v, rec)
@@ -117,6 +161,34 @@ func TestResyncLoopEventStream(t *testing.T) {
 	assert.Empty(t, idChannel)
 
 	cancel()
-	time.Sleep(time.Millisecond * 100)
+	time.Sleep(time.Millisecond * 60)
 	assert.Empty(t, idChannel)
+}
+
+func TestReconcilerWithLockNeverLeader(t *testing.T) {
+	obs := observability.NewForTest(t)
+
+	handler := &countingHandler{}
+
+	conf := DefaultConfig()
+	ctx, done := context.WithCancel(context.Background())
+	c := New(obs, conf, handler, EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+		handler.Handle("a")
+		return nil
+	}))
+	wg := sync.WaitGroup{}
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		c.Run(ctx)
+	}()
+
+	time.Sleep(time.Millisecond * 50)
+	assert.Empty(t, handler.Calls())
+
+	// Now finish
+	done()
+	wg.Wait()
+
+	assert.Empty(t, handler.Calls())
 }
