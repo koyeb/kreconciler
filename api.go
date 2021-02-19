@@ -101,3 +101,8 @@ type EventStreamFunc func(ctx context.Context, handler EventHandler) error
 func (f EventStreamFunc) Subscribe(ctx context.Context, handler EventHandler) error {
 	return f(ctx, handler)
 }
+
+var NoopStream = EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+	<-ctx.Done()
+	return nil
+})

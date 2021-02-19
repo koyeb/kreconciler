@@ -100,7 +100,7 @@ func ResyncLoopEventStream(obs observability.Wrapper, duration time.Duration, li
 			// Queue the objects to be handled.
 			elts, err := listFn(ctx)
 			if err != nil {
-				obs.SLog().Errorw("Failed resync loop call")
+				obs.SLog().Errorw("Failed resync loop call", "error", err)
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
