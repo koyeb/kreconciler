@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/mock"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/label"
+	"go.opentelemetry.io/otel/trace"
 	"sync"
 )
 
@@ -28,14 +31,41 @@ type worker struct {
 	capacity    int
 }
 
+func NewTracerHandler(tracer trace.Tracer, delegate Handler) Handler {
+	return HandlerFunc(func(ctx context.Context, id string) (result Result) {
+		ctx, span := tracer.Start(ctx, "reconcile",
+			trace.WithNewRoot(),
+			trace.WithSpanKind(trace.SpanKindConsumer),
+			trace.WithAttributes(
+				label.String("revision.id", id),
+			),
+		)
+		defer func() {
+			if result.Error != nil {
+				span.RecordError(result.Error)
+				span.SetStatus(codes.Error, "")
+			} else {
+				span.SetStatus(codes.Ok, "")
+			}
+			if result.RequeueDelay != 0 {
+				span.SetAttributes(label.Int64("requeue.millis", result.RequeueDelay.Milliseconds()))
+			}
+			span.End()
+		}()
+		result = delegate.Handle(ctx, id)
+		return result
+	})
+}
+
 func newWorker(obs observability.Wrapper, id, capacity, maxRetries int, handler Handler) *worker {
+	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
 	return &worker{
-		Wrapper:     obs.NewChildWrapper(fmt.Sprintf("worker-%d", id)),
+		Wrapper:     obs,
 		queue:       make(chan item, capacity+1), // TO handle the inflight item requeue
 		capacity:    capacity,
 		maxTries:    maxRetries,
 		objectLocks: newObjectLocks(capacity),
-		handler:     handler,
+		handler:     NewTracerHandler(obs.Tracer(), handler),
 	}
 }
 

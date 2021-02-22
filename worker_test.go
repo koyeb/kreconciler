@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
+	"go.opentelemetry.io/otel/codes"
 	"sync"
 	"testing"
 	"time"
@@ -114,4 +115,42 @@ func TestWorker(t *testing.T) {
 			tt.assert(t, mockHandler)
 		})
 	}
+}
+
+func TestTraceWorker(t *testing.T) {
+	obs := observability.NewForTestMetrics(t)
+
+	ctx, done := context.WithCancel(context.Background())
+
+	mockHandler := new(handlerMock)
+	mockHandler.On("Handle", "a").Return(Result{Error: errors.New("not good")})
+	mockHandler.On("Handle", "b").Return(Result{})
+	mockHandler.On("Handle", "c").Return(Result{RequeueDelay: time.Second})
+
+	worker := newWorker(obs, 0, 10, 1, mockHandler)
+	wg := sync.WaitGroup{}
+
+	go func() {
+		wg.Add(1)
+		defer wg.Done()
+		worker.Run(ctx)
+	}()
+	worker.Enqueue("a")
+	worker.Enqueue("b")
+	worker.Enqueue("c")
+
+	time.Sleep(time.Millisecond * 200)
+	done()
+	wg.Wait()
+
+	sr := obs.SpanRecorder().Completed()
+	assert.Len(t, sr, 3)
+	assert.Equal(t, "a", sr[0].Attributes()["revision.id"].AsString())
+	assert.Equal(t, codes.Error, sr[0].StatusCode())
+
+	assert.Equal(t, "b", sr[1].Attributes()["revision.id"].AsString())
+	assert.NotNil(t, sr[1].Attributes()["error.type"])
+
+	assert.Equal(t, "c", sr[2].Attributes()["revision.id"].AsString())
+	assert.NotNil(t, sr[2].Attributes()["requeue.millis"])
 }
