@@ -65,8 +65,25 @@ func newWorker(obs observability.Wrapper, id, capacity, maxRetries int, handler 
 		capacity:    capacity,
 		maxTries:    maxRetries,
 		objectLocks: newObjectLocks(capacity),
-		handler:     NewTracerHandler(obs.Tracer(), handler),
+		handler:     NewTracerHandler(obs.Tracer(), NewPanicHandler(obs, handler)),
 	}
+}
+
+func NewPanicHandler(obs observability.Wrapper, handler Handler) Handler {
+	return HandlerFunc(func(ctx context.Context, id string) (r Result) {
+		defer func() {
+			if err := recover(); err != nil {
+				obs.SLogWithContext(ctx).Errorw("Panicked inside an handler", "error", err)
+				if e, ok := err.(error); ok {
+					r = Result{Error: e}
+				} else {
+					r = Result{Error: errors.New(err.(string))}
+				}
+			}
+		}()
+		r = handler.Handle(ctx, id)
+		return
+	})
 }
 
 type item struct {
