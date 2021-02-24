@@ -24,6 +24,7 @@ type controller struct {
 }
 
 func (c *controller) BecomeLeader() {
+	c.SLog().Infow("Signaling we're becoming leader")
 	c.isLeader <- struct{}{}
 }
 
@@ -54,6 +55,7 @@ func (c *controller) Run(ctx context.Context) error {
 	}
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
+	c.SLog().Infow("Wait to become leader")
 	select {
 	case <-ctx.Done():
 		c.SLog().Info("Context terminated without ever being leader, never start streams.")
@@ -72,6 +74,7 @@ func (c *controller) Run(ctx context.Context) error {
 		}
 		// Wait until it's finished
 		<-ctx.Done()
+		c.SLog().Infow("Context terminated after being a leader")
 	}
 
 	c.SLog().Infow("stopping controller...")
