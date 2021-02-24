@@ -107,6 +107,7 @@ func ResyncLoopEventStream(obs observability.Wrapper, duration time.Duration, li
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
+			obs.SLog().Infow("Adding events", "count", len(elts))
 			for _, id := range elts {
 				// Listed objects enqueue as present.
 				err = handler.Handle(id)
