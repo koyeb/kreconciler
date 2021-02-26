@@ -37,7 +37,7 @@ func NewTracerHandler(tracer trace.Tracer, delegate Handler) Handler {
 			trace.WithNewRoot(),
 			trace.WithSpanKind(trace.SpanKindConsumer),
 			trace.WithAttributes(
-				label.String("revision.id", id),
+				label.String("id", id),
 			),
 		)
 		defer func() {

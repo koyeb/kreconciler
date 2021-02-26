@@ -145,12 +145,12 @@ func TestTraceWorker(t *testing.T) {
 
 	sr := obs.SpanRecorder().Completed()
 	assert.Len(t, sr, 3)
-	assert.Equal(t, "a", sr[0].Attributes()["revision.id"].AsString())
+	assert.Equal(t, "a", sr[0].Attributes()["id"].AsString())
 	assert.Equal(t, codes.Error, sr[0].StatusCode())
 
-	assert.Equal(t, "b", sr[1].Attributes()["revision.id"].AsString())
+	assert.Equal(t, "b", sr[1].Attributes()["id"].AsString())
 	assert.NotNil(t, sr[1].Attributes()["error.type"])
 
-	assert.Equal(t, "c", sr[2].Attributes()["revision.id"].AsString())
+	assert.Equal(t, "c", sr[2].Attributes()["id"].AsString())
 	assert.NotNil(t, sr[2].Attributes()["requeue.millis"])
 }
