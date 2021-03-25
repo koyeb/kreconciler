@@ -9,6 +9,7 @@ import (
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/trace"
+	"runtime/debug"
 	"sync"
 )
 
@@ -73,7 +74,7 @@ func NewPanicHandler(obs observability.Wrapper, handler Handler) Handler {
 	return HandlerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
-				obs.SLogWithContext(ctx).Errorw("Panicked inside an handler", "error", err)
+				obs.SLogWithContext(ctx).Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
 				if e, ok := err.(error); ok {
 					r = Result{Error: e}
 				} else {
