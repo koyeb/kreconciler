@@ -45,7 +45,7 @@ func (c *controller) Run(ctx context.Context) error {
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
 	for i := 0; i < c.cfg.WorkerHasher.Count(); i++ {
-		worker := newWorker(c, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.handler)
+		worker := newWorker(c, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.handler)
 		c.workers = append(c.workers, worker)
 		go func() {
 			c.workerWaitGroup.Add(1)

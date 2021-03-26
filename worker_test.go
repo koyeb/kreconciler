@@ -94,7 +94,7 @@ func TestWorker(t *testing.T) {
 			mockHandler := new(handlerMock)
 			tt.mock(mockHandler)
 
-			worker := newWorker(obs, 0, tt.capacity, tt.maxRetries, mockHandler)
+			worker := newWorker(obs, 0, tt.capacity, tt.maxRetries, 10, time.Millisecond*100, mockHandler)
 			wg := sync.WaitGroup{}
 
 			go func() {
@@ -108,7 +108,7 @@ func TestWorker(t *testing.T) {
 				err := worker.Enqueue(action.id)
 				assert.Equal(t, action.expectedErr, err)
 			}
-			time.Sleep(time.Millisecond * 200)
+			time.Sleep(time.Millisecond * 600)
 			done()
 			wg.Wait()
 
@@ -127,7 +127,7 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Handle", "b").Return(Result{})
 	mockHandler.On("Handle", "c").Return(Result{RequeueDelay: time.Second})
 
-	worker := newWorker(obs, 0, 10, 1, mockHandler)
+	worker := newWorker(obs, 0, 10, 1, 10, time.Millisecond*100, mockHandler)
 	wg := sync.WaitGroup{}
 
 	go func() {
@@ -152,5 +152,5 @@ func TestTraceWorker(t *testing.T) {
 	assert.NotNil(t, sr[1].Attributes()["error.type"])
 
 	assert.Equal(t, "c", sr[2].Attributes()["id"].AsString())
-	assert.NotNil(t, sr[2].Attributes()["requeue.millis"])
+	assert.NotNil(t, sr[2].Attributes()["schedule.millis"])
 }

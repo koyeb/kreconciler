@@ -11,6 +11,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	"runtime/debug"
 	"sync"
+	"time"
 )
 
 type handlerMock struct {
@@ -26,6 +27,8 @@ type worker struct {
 	observability.Wrapper
 	sync.Mutex
 	queue       chan item
+	ticker      *time.Ticker
+	delayQueue  *dq
 	maxTries    int
 	handler     Handler
 	objectLocks objectLocks
@@ -49,7 +52,7 @@ func NewTracerHandler(tracer trace.Tracer, delegate Handler) Handler {
 				span.SetStatus(codes.Ok, "")
 			}
 			if result.RequeueDelay != 0 {
-				span.SetAttributes(label.Int64("requeue.millis", result.RequeueDelay.Milliseconds()))
+				span.SetAttributes(label.Int64("schedule.millis", result.RequeueDelay.Milliseconds()))
 			}
 			span.End()
 		}()
@@ -58,13 +61,14 @@ func NewTracerHandler(tracer trace.Tracer, delegate Handler) Handler {
 	})
 }
 
-func newWorker(obs observability.Wrapper, id, capacity, maxRetries int, handler Handler) *worker {
+func newWorker(obs observability.Wrapper, id, capacity, maxRetries, delayQueueSize int, delayResolution time.Duration, handler Handler) *worker {
 	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
 	return &worker{
 		Wrapper:     obs,
-		queue:       make(chan item, capacity+1), // TO handle the inflight item requeue
+		queue:       make(chan item, capacity+1), // TO handle the inflight item schedule
 		capacity:    capacity,
 		maxTries:    maxRetries,
+		delayQueue:  newQueue(delayQueueSize, delayResolution),
 		objectLocks: newObjectLocks(capacity),
 		handler:     NewTracerHandler(obs.Tracer(), NewPanicHandler(obs, handler)),
 	}
@@ -91,18 +95,24 @@ type item struct {
 	ctx      context.Context
 	tryCount int
 	id       string
+	maxTries int
 }
 
 var QueueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
-	switch w.objectLocks.Take(id) {
+	return w.enqueue(item{ctx: context.Background(), id: id, maxTries: w.maxTries})
+}
+
+func (w *worker) enqueue(i item) error {
+	switch w.objectLocks.Take(i.id) {
 	case alreadyPresent:
+		w.SLog().Debug("Item already present in the queue, ignoring enqueue")
 		return nil
 	case queueOverflow:
 		return QueueAtCapacityError
 	default:
-		w.queue <- item{ctx: context.Background(), id: id}
+		w.queue <- i
 		return nil
 	}
 }
@@ -110,6 +120,14 @@ func (w *worker) Enqueue(id string) error {
 func (w *worker) Run(ctx context.Context) {
 	w.SLog().Info("worker started")
 	defer w.SLog().Info("worker stopped")
+	go w.delayQueue.run(ctx, func(_ time.Time, i interface{}) {
+		itm := i.(item)
+		w.SLog().Debugw("Reenqueuing item after delay", "object_id", itm.id)
+		err := w.enqueue(itm)
+		if err != nil {
+			w.SLog().Errorw("Failed reenqueing delayed item", "error", err)
+		}
+	})
 	for {
 		select {
 		case <-ctx.Done():
@@ -118,26 +136,22 @@ func (w *worker) Run(ctx context.Context) {
 			w.objectLocks.Free(item.id)
 			newCtx := item.ctx
 			// process the object.
-			w.SLog().Debugw("Get event for item", "id", item.id, "try", item.tryCount)
+			w.SLog().Debugw("Get event for item", "object_id", item.id, "try", item.tryCount)
 			res := w.handler.Handle(newCtx, item.id)
 			// Retry if required based on the result.
 			if res.Error != nil {
 				w.SLog().Warnw("Failed reconcile loop", "object_id", item.id, "error", res.Error)
 			}
-			// TODO handle delay
-			delay := res.GetRequeueDelay()
+			delay := res.GetRequeueDelay(w.delayQueue.resolution)
 			if delay != 0 {
 				item.tryCount += 1
-				if w.maxTries != 0 && item.tryCount == w.maxTries {
+				if item.maxTries != 0 && item.tryCount == item.maxTries {
 					w.SLog().Errorw("Max retry exceeded, dropping item", "object_id", item.id)
 				} else {
-					switch w.objectLocks.Take(item.id) {
-					case alreadyPresent:
-						w.SLog().Debug("Item already present in the queue, ignoring enqueue")
-					case queueOverflow:
-						panic("Queue at capacity this shouldn't happen on a requeue!")
-					default:
-						w.queue <- item
+					w.SLog().Debugw("Delay item retry", "object_id", item.id)
+					err := w.delayQueue.schedule(item, delay)
+					if err != nil {
+						w.SLog().Errorw("Error scheduling delay", "error", err)
 					}
 				}
 			}

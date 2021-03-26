@@ -11,14 +11,23 @@ type Config struct {
 	WorkerQueueSize       int
 	WorkerHasher          WorkerHasher
 	LeaderElectionEnabled bool
+	DelayResolution       time.Duration
+	DelayQueueSize        int
 }
 
 func DefaultConfig() Config {
 	return Config{
-		WorkerHasher:          DefaultHasher{Num: 1},
-		MaxItemRetries:        10,
+		// the function to assign work between wrokers
+		WorkerHasher: DefaultHasher{Num: 1},
+		// the number of times an item gets retried before dropping it
+		MaxItemRetries: 10,
+		// the size of the worker queue (outstanding reconciles)
 		WorkerQueueSize:       1000,
 		LeaderElectionEnabled: true,
+		// the lowest possible time for a delay retry
+		DelayResolution: time.Millisecond * 250,
+		// the maximum number of items scheduled for retry
+		DelayQueueSize: 1000,
 	}
 }
 
@@ -64,11 +73,11 @@ type Result struct {
 	Error error
 }
 
-func (r Result) GetRequeueDelay() time.Duration {
+func (r Result) GetRequeueDelay(defaultDelay time.Duration) time.Duration {
 	if r.Error != nil {
 		er, ok := r.Error.(Error)
 		if !ok {
-			return time.Millisecond * 100
+			return defaultDelay
 		} else {
 			return er.RetryDelay()
 		}
