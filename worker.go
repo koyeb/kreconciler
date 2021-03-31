@@ -79,6 +79,7 @@ var QueueAtCapacityError = errors.New("queue at capacity, retry later")
 func (w *worker) Enqueue(id string) error {
 	ctx, _ := w.Tracer().Start(context.Background(), "reconcile",
 		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithNewRoot(),
 		trace.WithAttributes(
 			label.String("id", id),
 		),
@@ -155,6 +156,7 @@ func (w *worker) Run(ctx context.Context) {
 
 func (w *worker) handle(ctx context.Context, id string) Result {
 	handleCtx, span := w.Tracer().Start(ctx, "handle",
+		trace.WithNewRoot(),
 		trace.WithAttributes(
 			label.String("id", id),
 		),

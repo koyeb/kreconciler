@@ -145,12 +145,6 @@ func TestTraceWorker(t *testing.T) {
 
 	sr := obs.SpanRecorder().Completed()
 	assert.Len(t, sr, 8) // 5 handle (2 retries) + 3 reconcile
-	for _, sp := range sr {
-		if sp.Name() == "handle" {
-			assert.True(t, sp.ParentSpanID().IsValid(), "span should be present", sp)
-		}
-	}
-
 	assert.Equal(t, "a", sr[0].Attributes()["id"].AsString())
 	assert.Equal(t, "handle", sr[0].Name())
 	assert.Equal(t, codes.Error, sr[0].StatusCode())
