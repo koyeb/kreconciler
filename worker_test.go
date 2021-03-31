@@ -125,9 +125,9 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler := new(handlerMock)
 	mockHandler.On("Handle", "a").Return(Result{Error: errors.New("not good")})
 	mockHandler.On("Handle", "b").Return(Result{})
-	mockHandler.On("Handle", "c").Return(Result{RequeueDelay: time.Second})
+	mockHandler.On("Handle", "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
-	worker := newWorker(obs, 0, 10, 1, 10, time.Millisecond*100, mockHandler)
+	worker := newWorker(obs, 0, 10, 2, 10, time.Millisecond*100, mockHandler)
 	wg := sync.WaitGroup{}
 
 	go func() {
@@ -139,18 +139,49 @@ func TestTraceWorker(t *testing.T) {
 	worker.Enqueue("b")
 	worker.Enqueue("c")
 
-	time.Sleep(time.Millisecond * 200)
+	time.Sleep(time.Second)
 	done()
 	wg.Wait()
 
 	sr := obs.SpanRecorder().Completed()
-	assert.Len(t, sr, 3)
+	assert.Len(t, sr, 8) // 5 handle (2 retries) + 3 reconcile
+	for _, sp := range sr {
+		if sp.Name() == "handle" {
+			assert.True(t, sp.ParentSpanID().IsValid(), "span should be present", sp)
+		}
+	}
+
 	assert.Equal(t, "a", sr[0].Attributes()["id"].AsString())
+	assert.Equal(t, "handle", sr[0].Name())
 	assert.Equal(t, codes.Error, sr[0].StatusCode())
+	assert.NotNil(t, sr[0].Attributes()["error.type"])
 
 	assert.Equal(t, "b", sr[1].Attributes()["id"].AsString())
-	assert.NotNil(t, sr[1].Attributes()["error.type"])
+	assert.Equal(t, "handle", sr[1].Name())
+	assert.Equal(t, codes.Ok, sr[1].StatusCode())
 
-	assert.Equal(t, "c", sr[2].Attributes()["id"].AsString())
-	assert.NotNil(t, sr[2].Attributes()["schedule.millis"])
+	assert.Equal(t, "b", sr[2].Attributes()["id"].AsString())
+	assert.Equal(t, "reconcile", sr[2].Name())
+	assert.Equal(t, codes.Ok, sr[2].StatusCode())
+
+	assert.Equal(t, "c", sr[3].Attributes()["id"].AsString())
+	assert.Equal(t, "handle", sr[3].Name())
+	assert.Equal(t, codes.Ok, sr[3].StatusCode())
+
+	assert.Equal(t, "a", sr[4].Attributes()["id"].AsString())
+	assert.Equal(t, "handle", sr[4].Name())
+	assert.Equal(t, codes.Error, sr[4].StatusCode())
+
+	assert.Equal(t, "a", sr[5].Attributes()["id"].AsString())
+	assert.Equal(t, "reconcile", sr[5].Name())
+	assert.Equal(t, codes.Error, sr[5].StatusCode())
+	assert.Equal(t, "Max try exceeded", sr[5].StatusMessage())
+
+	assert.Equal(t, "c", sr[6].Attributes()["id"].AsString())
+	assert.Equal(t, "handle", sr[6].Name())
+	assert.Equal(t, codes.Ok, sr[6].StatusCode())
+
+	assert.Equal(t, "c", sr[7].Attributes()["id"].AsString())
+	assert.Equal(t, "reconcile", sr[7].Name())
+	assert.Equal(t, codes.Error, sr[7].StatusCode())
 }

@@ -35,32 +35,6 @@ type worker struct {
 	capacity    int
 }
 
-func NewTracerHandler(tracer trace.Tracer, delegate Handler) Handler {
-	return HandlerFunc(func(ctx context.Context, id string) (result Result) {
-		ctx, span := tracer.Start(ctx, "reconcile",
-			trace.WithNewRoot(),
-			trace.WithSpanKind(trace.SpanKindConsumer),
-			trace.WithAttributes(
-				label.String("id", id),
-			),
-		)
-		defer func() {
-			if result.Error != nil {
-				span.RecordError(result.Error)
-				span.SetStatus(codes.Error, "")
-			} else {
-				span.SetStatus(codes.Ok, "")
-			}
-			if result.RequeueDelay != 0 {
-				span.SetAttributes(label.Int64("schedule.millis", result.RequeueDelay.Milliseconds()))
-			}
-			span.End()
-		}()
-		result = delegate.Handle(ctx, id)
-		return result
-	})
-}
-
 func newWorker(obs observability.Wrapper, id, capacity, maxRetries, delayQueueSize int, delayResolution time.Duration, handler Handler) *worker {
 	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
 	return &worker{
@@ -70,7 +44,7 @@ func newWorker(obs observability.Wrapper, id, capacity, maxRetries, delayQueueSi
 		maxTries:    maxRetries,
 		delayQueue:  newQueue(delayQueueSize, delayResolution),
 		objectLocks: newObjectLocks(capacity),
-		handler:     NewTracerHandler(obs.Tracer(), NewPanicHandler(obs, handler)),
+		handler:     NewPanicHandler(obs, handler),
 	}
 }
 
@@ -79,6 +53,8 @@ func NewPanicHandler(obs observability.Wrapper, handler Handler) Handler {
 		defer func() {
 			if err := recover(); err != nil {
 				obs.SLogWithContext(ctx).Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
+				span := trace.SpanFromContext(ctx)
+				span.AddEvent("panic")
 				if e, ok := err.(error); ok {
 					r = Result{Error: e}
 				} else {
@@ -101,15 +77,27 @@ type item struct {
 var QueueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
-	return w.enqueue(item{ctx: context.Background(), id: id, maxTries: w.maxTries})
+	ctx, _ := w.Tracer().Start(context.Background(), "reconcile",
+		trace.WithSpanKind(trace.SpanKindConsumer),
+		trace.WithAttributes(
+			label.String("id", id),
+		),
+	)
+
+	return w.enqueue(item{ctx: ctx, id: id, maxTries: w.maxTries})
 }
 
 func (w *worker) enqueue(i item) error {
+	parentSpan := trace.SpanFromContext(i.ctx)
 	switch w.objectLocks.Take(i.id) {
 	case alreadyPresent:
+		parentSpan.SetStatus(codes.Ok, "already_present")
+		parentSpan.End()
 		w.SLog().Debug("Item already present in the queue, ignoring enqueue")
 		return nil
 	case queueOverflow:
+		parentSpan.SetStatus(codes.Error, "queue_full")
+		parentSpan.End()
 		return QueueAtCapacityError
 	default:
 		w.queue <- i
@@ -134,27 +122,53 @@ func (w *worker) Run(ctx context.Context) {
 			return
 		case item := <-w.queue:
 			w.objectLocks.Free(item.id)
-			newCtx := item.ctx
+			parentSpan := trace.SpanFromContext(item.ctx)
+			parentSpan.AddEvent("dequeue")
 			// process the object.
-			w.SLog().Debugw("Get event for item", "object_id", item.id, "try", item.tryCount)
-			res := w.handler.Handle(newCtx, item.id)
-			// Retry if required based on the result.
-			if res.Error != nil {
-				w.SLog().Warnw("Failed reconcile loop", "object_id", item.id, "error", res.Error)
-			}
+			res := w.handle(item.ctx, item.id)
 			delay := res.GetRequeueDelay(w.delayQueue.resolution)
 			if delay != 0 {
 				item.tryCount += 1
 				if item.maxTries != 0 && item.tryCount == item.maxTries {
+					parentSpan.SetStatus(codes.Error, "Max try exceeded")
+					parentSpan.End()
 					w.SLog().Errorw("Max retry exceeded, dropping item", "object_id", item.id)
 				} else {
+					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(label.Int64("schedule.millis", delay.Milliseconds()), label.Int("try_count", item.tryCount), label.Int("max_try", item.maxTries)))
 					w.SLog().Debugw("Delay item retry", "object_id", item.id)
 					err := w.delayQueue.schedule(item, delay)
 					if err != nil {
+						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
+						parentSpan.RecordError(err)
+						parentSpan.End()
 						w.SLog().Errorw("Error scheduling delay", "error", err)
 					}
 				}
+			} else {
+				w.SLog().Infow("Done")
+				parentSpan.SetStatus(codes.Ok, "")
+				parentSpan.End()
 			}
 		}
 	}
+}
+
+func (w *worker) handle(ctx context.Context, id string) Result {
+	handleCtx, span := w.Tracer().Start(ctx, "handle",
+		trace.WithAttributes(
+			label.String("id", id),
+		),
+	)
+	w.SLog().Debugw("Get event for item", "object_id", id)
+	res := w.handler.Handle(handleCtx, id)
+	// Retry if required based on the result.
+	if res.Error != nil {
+		span.RecordError(res.Error)
+		span.SetStatus(codes.Error, "")
+		w.SLog().Warnw("Failed reconcile loop", "object_id", id, "error", res.Error)
+	} else {
+		span.SetStatus(codes.Ok, "")
+	}
+	span.End()
+	return res
 }
