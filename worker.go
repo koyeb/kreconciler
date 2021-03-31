@@ -101,6 +101,7 @@ func (w *worker) enqueue(i item) error {
 		parentSpan.End()
 		return QueueAtCapacityError
 	default:
+		parentSpan.AddEvent("enqueue")
 		w.queue <- i
 		return nil
 	}
@@ -156,7 +157,6 @@ func (w *worker) Run(ctx context.Context) {
 
 func (w *worker) handle(ctx context.Context, id string) Result {
 	handleCtx, span := w.Tracer().Start(ctx, "handle",
-		trace.WithNewRoot(),
 		trace.WithAttributes(
 			label.String("id", id),
 		),
