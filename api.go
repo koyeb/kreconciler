@@ -22,7 +22,7 @@ func DefaultConfig() Config {
 		// the number of times an item gets retried before dropping it
 		MaxItemRetries: 10,
 		// the size of the worker queue (outstanding reconciles)
-		WorkerQueueSize:       1000,
+		WorkerQueueSize:       10000,
 		LeaderElectionEnabled: true,
 		// the lowest possible time for a delay retry
 		DelayResolution: time.Millisecond * 250,
