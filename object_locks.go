@@ -40,3 +40,9 @@ func (o *objectLocks) Free(id string) {
 	defer o.m.Unlock()
 	delete(o.objects, id)
 }
+
+func (o *objectLocks) Size() int {
+	o.m.Lock()
+	defer o.m.Unlock()
+	return len(o.objects)
+}
