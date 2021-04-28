@@ -115,9 +115,9 @@ func (f EventStreamFunc) Subscribe(ctx context.Context, handler EventHandler) er
 
 // MeteredEventHandler adds metrics any event handler
 func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) EventHandler {
-	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_" + name + "_count")
-	errors := counter.Bind(label.Bool("error", true))
-	ok := counter.Bind(label.Bool("error", false))
+	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_event_count")
+	errors := counter.Bind(label.Bool("error", true), label.String("stream", name))
+	ok := counter.Bind(label.Bool("error", false), label.String("stream", name))
 	return EventHandlerFunc(func(jobId string) (err error) {
 		defer func() {
 			if err != nil {
