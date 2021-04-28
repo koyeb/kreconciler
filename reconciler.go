@@ -17,7 +17,7 @@ type controller struct {
 	cfg             Config
 	workers         []*worker
 	handler         Handler
-	eventStreams    []EventStream
+	eventStreams    map[string]EventStream
 	streamWaitGroup sync.WaitGroup
 	workerWaitGroup sync.WaitGroup
 	isLeader        chan struct{}
@@ -28,7 +28,7 @@ func (c *controller) BecomeLeader() {
 	c.isLeader <- struct{}{}
 }
 
-func New(obs observability.Wrapper, config Config, handler Handler, streams ...EventStream) Controller {
+func New(obs observability.Wrapper, config Config, handler Handler, streams map[string]EventStream) Controller {
 	return &controller{
 		Wrapper:      obs.NewChildWrapper("reconciler"),
 		cfg:          config,
@@ -61,12 +61,13 @@ func (c *controller) Run(ctx context.Context) error {
 		c.SLog().Info("Context terminated without ever being leader, never start streams.")
 	case <-c.isLeader:
 		c.SLog().Infow("Became leader, starting reconciler")
-		for _, stream := range c.eventStreams {
+		for name, stream := range c.eventStreams {
 			stream := stream
+			n := name
 			go func() {
 				c.streamWaitGroup.Add(1)
 				defer c.streamWaitGroup.Done()
-				err := stream.Subscribe(streamCtx, EventHandlerFunc(c.enqueue))
+				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Meter(), n, EventHandlerFunc(c.enqueue)))
 				if err != nil {
 					c.SLog().Errorw("Failed subscribing to stream", "error", err)
 				}
@@ -91,6 +92,10 @@ func (c *controller) Run(ctx context.Context) error {
 }
 
 func (c *controller) enqueue(id string) error {
+	// Simply discard items with empty ids
+	if id == "" {
+		return nil
+	}
 	workerId := c.cfg.WorkerHasher.Route(id)
 	return c.workers[workerId].Enqueue(id)
 }

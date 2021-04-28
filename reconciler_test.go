@@ -63,6 +63,24 @@ func TestReconciler(t *testing.T) {
 				}, calls)
 			},
 		},
+		"ignore_empty_event": {
+			scenario: func(done func()) EventStreamFunc {
+				return func(ctx context.Context, handler EventHandler) error {
+					handler.Handle("a")
+					handler.Handle("")
+					handler.Handle("c")
+					time.Sleep(time.Millisecond * 10)
+					done()
+					return nil
+				}
+			},
+			assert: func(t *testing.T, c *controller, calls map[string]int) {
+				assert.Equal(t, map[string]int{
+					"a": 1,
+					"c": 1,
+				}, calls)
+			},
+		},
 	}
 
 	for n, tt := range testCases {
@@ -80,7 +98,7 @@ func TestReconciler(t *testing.T) {
 					}
 					conf.LeaderElectionEnabled = false
 					conf.WorkerHasher = DefaultHasher{Num: uint32(count)}
-					c := New(obs, conf, &handler, tt.scenario(done))
+					c := New(obs, conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
 					require.NoError(t, c.Run(ctx))
 
 					tt.assert(t, c.(*controller), handler.Calls())
@@ -96,16 +114,18 @@ func TestReconcilerWithLock(t *testing.T) {
 
 	conf := DefaultConfig()
 	ctx, done := context.WithCancel(context.Background())
-	c := New(obs, conf, handler, EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-		handler.Handle("a")
-		handler.Handle("b")
-		handler.Handle("c")
-		time.Sleep(time.Millisecond * 20)
-		handler.Handle("c")
-		time.Sleep(time.Millisecond * 10)
-		done()
-		return nil
-	}))
+	c := New(obs, conf, handler, map[string]EventStream{
+		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+			handler.Handle("a")
+			handler.Handle("b")
+			handler.Handle("c")
+			time.Sleep(time.Millisecond * 20)
+			handler.Handle("c")
+			time.Sleep(time.Millisecond * 10)
+			done()
+			return nil
+		}),
+	})
 	wg := sync.WaitGroup{}
 	go func() {
 		wg.Add(1)
@@ -172,10 +192,12 @@ func TestReconcilerWithLockNeverLeader(t *testing.T) {
 
 	conf := DefaultConfig()
 	ctx, done := context.WithCancel(context.Background())
-	c := New(obs, conf, handler, EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-		handler.Handle("a")
-		return nil
-	}))
+	c := New(obs, conf, handler, map[string]EventStream{
+		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+			handler.Handle("a")
+			return nil
+		}),
+	})
 	wg := sync.WaitGroup{}
 	go func() {
 		wg.Add(1)

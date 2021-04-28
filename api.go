@@ -2,6 +2,8 @@ package reconciler
 
 import (
 	"context"
+	"go.opentelemetry.io/otel/label"
+	"go.opentelemetry.io/otel/metric"
 	"hash/fnv"
 	"time"
 )
@@ -109,6 +111,24 @@ type EventStreamFunc func(ctx context.Context, handler EventHandler) error
 
 func (f EventStreamFunc) Subscribe(ctx context.Context, handler EventHandler) error {
 	return f(ctx, handler)
+}
+
+// MeteredEventHandler adds metrics any event handler
+func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) EventHandler {
+	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_" + name + "_count")
+	errors := counter.Bind(label.Bool("error", true))
+	ok := counter.Bind(label.Bool("error", false))
+	return EventHandlerFunc(func(jobId string) (err error) {
+		defer func() {
+			if err != nil {
+				errors.Add(context.Background(), 1)
+			} else {
+				ok.Add(context.Background(), 1)
+			}
+		}()
+		err = child.Handle(jobId)
+		return
+	})
 }
 
 var NoopStream = EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
