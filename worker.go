@@ -187,20 +187,20 @@ func (w *worker) Run(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case item := <-w.queue:
-			w.objectLocks.Free(item.id)
-			parentSpan := trace.SpanFromContext(item.ctx)
+		case itm := <-w.queue:
+			w.objectLocks.Free(itm.id)
+			parentSpan := trace.SpanFromContext(itm.ctx)
 			parentSpan.AddEvent("dequeue")
 			w.metrics.dequeue.Add(ctx, 1)
 			// process the object.
-			res := w.handle(item.ctx, item.id)
+			res := w.handle(itm.ctx, itm.id)
 			delay := res.GetRequeueDelay(w.delayQueue.resolution)
 			if delay != 0 {
-				item.tryCount += 1
-				if item.maxTries != 0 && item.tryCount == item.maxTries {
+				itm.tryCount += 1
+				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
 					parentSpan.SetStatus(codes.Error, "Max try exceeded")
 					parentSpan.End()
-					w.SLog().Errorw("Max retry exceeded, dropping item", "object_id", item.id)
+					w.SLog().Errorw("Max retry exceeded, dropping item", "object_id", itm.id)
 					w.metrics.itemDrop.Add(ctx, 1)
 				} else {
 					if res.Error != nil {
@@ -208,9 +208,9 @@ func (w *worker) Run(ctx context.Context) {
 					} else {
 						w.metrics.delayWithoutError.Record(ctx, delay.Milliseconds())
 					}
-					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(label.Int64("schedule.millis", delay.Milliseconds()), label.Int("try_count", item.tryCount), label.Int("max_try", item.maxTries)))
-					w.SLog().Debugw("Delay item retry", "object_id", item.id)
-					err := w.delayQueue.schedule(item, delay)
+					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(label.Int64("schedule.millis", delay.Milliseconds()), label.Int("try_count", itm.tryCount), label.Int("max_try", itm.maxTries)))
+					w.SLog().Debugw("Delay item retry", "object_id", itm.id)
+					err := w.delayQueue.schedule(itm, delay)
 					if err != nil {
 						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
 						parentSpan.RecordError(err)
