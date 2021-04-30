@@ -3,6 +3,9 @@ package reconciler
 import (
 	"context"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
+	"go.opentelemetry.io/otel/label"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/unit"
 	"sync"
 	"time"
 )
@@ -101,18 +104,33 @@ func (c *controller) enqueue(id string) error {
 }
 
 func ResyncLoopEventStream(obs observability.Wrapper, duration time.Duration, listFn func(ctx context.Context) ([]string, error)) EventStream {
+	m := metric.Must(obs.Meter())
+	count := m.NewInt64Counter("kreconciler_stream_resync_item_count",
+		metric.WithUnit(unit.Dimensionless),
+		metric.WithDescription("Increased by the number of items returned by the listFn"),
+	)
+	recorder := m.NewInt64ValueRecorder("kreconciler_stream_resync_millis",
+		metric.WithUnit(unit.Milliseconds),
+		metric.WithDescription("time spent calling the listFn"),
+	)
+	errorRecorder := recorder.Bind(label.String("status", "error"))
+	successRecorder := recorder.Bind(label.String("status", "success"))
 	return EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
 		ticker := time.NewTicker(duration)
 		for {
 			obs.SLog().Info("Running step of resync loop")
+			start := time.Now()
 			// Queue the objects to be handled.
 			elts, err := listFn(ctx)
 			if err != nil {
+				errorRecorder.Record(ctx, time.Since(start).Milliseconds())
 				obs.SLog().Errorw("Failed resync loop call", "error", err)
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
 			obs.SLog().Infow("Adding events", "count", len(elts))
+			count.Add(ctx, int64(len(elts)))
+			successRecorder.Record(ctx, time.Since(start).Milliseconds())
 			for _, id := range elts {
 				// Listed objects enqueue as present.
 				err = handler.Handle(id)
