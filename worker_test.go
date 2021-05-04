@@ -5,6 +5,7 @@ import (
 	"errors"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 	"go.opentelemetry.io/otel/codes"
 	"sync"
 	"testing"
@@ -19,50 +20,51 @@ type action struct {
 
 func TestWorker(t *testing.T) {
 	testCases := map[string]struct {
-		capacity   int
-		maxRetries int
-		actions    []action
-		mock       func(m *handlerMock)
-		assert     func(t *testing.T, m *handlerMock)
+		capacity    int
+		maxTries    int
+		maxDuration time.Duration
+		actions     []action
+		mock        func(m *handlerMock)
+		assert      func(t *testing.T, m *handlerMock)
 	}{
 		"simpleInserts": {
-			capacity:   2,
-			maxRetries: 0,
+			capacity: 2,
+			maxTries: 0,
 			actions: []action{
 				{id: "a"},
 				{id: "b"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", "a").Return(Result{})
-				m.On("Handle", "b").Return(Result{})
+				m.On("Handle", mock.Anything, "a").Return(Result{})
+				m.On("Handle", mock.Anything, "b").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
 				m.AssertNumberOfCalls(t, "Handle", 2)
 			},
 		},
 		"insertSameNoDupe": {
-			capacity:   2,
-			maxRetries: 0,
+			capacity: 2,
+			maxTries: 0,
 			actions: []action{
 				{id: "a"},
 				{id: "a"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", "a").Return(Result{})
+				m.On("Handle", mock.Anything, "a").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
 				m.AssertNumberOfCalls(t, "Handle", 1)
 			},
 		},
 		"retriesDrop": {
-			capacity:   2,
-			maxRetries: 2,
+			capacity: 2,
+			maxTries: 2,
 			actions: []action{
 				{id: "a"},
 				{id: "a"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", "a").Return(Result{Error: errors.New("not good")})
+				m.On("Handle", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
 				m.AssertNumberOfCalls(t, "Handle", 2)
@@ -76,11 +78,29 @@ func TestWorker(t *testing.T) {
 				{id: "c", expectedErr: QueueAtCapacityError},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", "a").Return(Result{})
-				m.On("Handle", "b").Return(Result{})
+				m.On("Handle", mock.Anything, "a").Return(Result{})
+				m.On("Handle", mock.Anything, "b").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
 				m.AssertNumberOfCalls(t, "Handle", 2)
+				m.AssertNotCalled(t, "Handle", mock.Anything, "c")
+			},
+		},
+		"takeTooLong": {
+			capacity: 1,
+			actions: []action{
+				{id: "a"},
+			},
+			maxTries:    2,
+			maxDuration: time.Millisecond * 100,
+			mock: func(m *handlerMock) {
+				m.On("Handle", mock.Anything, "a").After(time.Millisecond * 200).Run(func(args mock.Arguments) {
+					assert.Equal(t, context.DeadlineExceeded, args.Get(0).(context.Context).Err())
+				}).Return(Result{Error: context.DeadlineExceeded})
+			},
+			assert: func(t *testing.T, m *handlerMock) {
+				m.AssertNumberOfCalls(t, "Handle", 2)
+				m.AssertNotCalled(t, "Handle", "b")
 				m.AssertNotCalled(t, "Handle", "c")
 			},
 		},
@@ -94,7 +114,7 @@ func TestWorker(t *testing.T) {
 			mockHandler := new(handlerMock)
 			tt.mock(mockHandler)
 
-			worker := newWorker(obs, 0, tt.capacity, tt.maxRetries, 10, time.Millisecond*100, mockHandler)
+			worker := newWorker(obs, 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
 			wg := sync.WaitGroup{}
 
 			go func() {
@@ -123,11 +143,11 @@ func TestTraceWorker(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 
 	mockHandler := new(handlerMock)
-	mockHandler.On("Handle", "a").Return(Result{Error: errors.New("not good")})
-	mockHandler.On("Handle", "b").Return(Result{})
-	mockHandler.On("Handle", "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
+	mockHandler.On("Handle", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
+	mockHandler.On("Handle", mock.Anything, "b").Return(Result{})
+	mockHandler.On("Handle", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
-	worker := newWorker(obs, 0, 10, 2, 10, time.Millisecond*100, mockHandler)
+	worker := newWorker(obs, 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
 	wg := sync.WaitGroup{}
 
 	go func() {
@@ -178,4 +198,13 @@ func TestTraceWorker(t *testing.T) {
 	assert.Equal(t, "c", sr[7].Attributes()["id"].AsString())
 	assert.Equal(t, "reconcile", sr[7].Name())
 	assert.Equal(t, codes.Error, sr[7].StatusCode())
+}
+
+type handlerMock struct {
+	mock.Mock
+}
+
+func (h *handlerMock) Handle(ctx context.Context, id string) Result {
+	res := h.Called(ctx, id)
+	return res.Get(0).(Result)
 }

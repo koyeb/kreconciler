@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
-	"github.com/stretchr/testify/mock"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/metric"
@@ -15,15 +14,6 @@ import (
 	"sync"
 	"time"
 )
-
-type handlerMock struct {
-	mock.Mock
-}
-
-func (h *handlerMock) Handle(_ context.Context, id string) Result {
-	res := h.Called(id)
-	return res.Get(0).(Result)
-}
 
 type metrics struct {
 	queueSizeObserver     metric.Int64ValueObserver
@@ -51,17 +41,17 @@ type worker struct {
 	metrics     *metrics
 }
 
-func newWorker(obs observability.Wrapper, id, capacity, maxRetries, delayQueueSize int, delayResolution time.Duration, handler Handler) *worker {
+func newWorker(obs observability.Wrapper, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
 	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
 	w := &worker{
 		Wrapper:     obs,
 		queue:       make(chan item, capacity+1), // TO handle the inflight item schedule
 		capacity:    capacity,
-		maxTries:    maxRetries,
+		maxTries:    maxTries,
 		metrics:     &metrics{},
 		delayQueue:  newQueue(delayQueueSize, delayResolution),
 		objectLocks: newObjectLocks(capacity),
-		handler:     NewPanicHandler(obs, handler),
+		handler:     NewPanicHandler(obs, NewHandlerWithTimeout(handler, maxReconcileTime)),
 	}
 	decorateMeter(w, id)
 
@@ -126,6 +116,17 @@ func NewPanicHandler(obs observability.Wrapper, handler Handler) Handler {
 		}()
 		r = handler.Handle(ctx, id)
 		return
+	})
+}
+
+func NewHandlerWithTimeout(handler Handler, timeout time.Duration) Handler {
+	return HandlerFunc(func(ctx context.Context, id string) Result {
+		if timeout != 0 {
+			var cancel context.CancelFunc
+			ctx, cancel = context.WithTimeout(ctx, timeout)
+			defer cancel()
+		}
+		return handler.Handle(ctx, id)
 	})
 }
 

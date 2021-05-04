@@ -15,6 +15,7 @@ type Config struct {
 	LeaderElectionEnabled bool
 	DelayResolution       time.Duration
 	DelayQueueSize        int
+	MaxReconcileTime      time.Duration
 }
 
 func DefaultConfig() Config {
@@ -30,6 +31,8 @@ func DefaultConfig() Config {
 		DelayResolution: time.Millisecond * 250,
 		// the maximum number of items scheduled for retry
 		DelayQueueSize: 1000,
+		// the maximum time a handle of a should take
+		MaxReconcileTime: time.Second * 10,
 	}
 }
 
