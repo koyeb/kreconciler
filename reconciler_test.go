@@ -45,11 +45,11 @@ func TestReconciler(t *testing.T) {
 		"simple": {
 			scenario: func(done func()) EventStreamFunc {
 				return func(ctx context.Context, handler EventHandler) error {
-					handler.Handle("a")
-					handler.Handle("b")
-					handler.Handle("c")
+					handler.Handle(ctx, "a")
+					handler.Handle(ctx, "b")
+					handler.Handle(ctx, "c")
 					time.Sleep(time.Millisecond * 20)
-					handler.Handle("c")
+					handler.Handle(ctx, "c")
 					time.Sleep(time.Millisecond * 10)
 					done()
 					return nil
@@ -66,9 +66,9 @@ func TestReconciler(t *testing.T) {
 		"ignore_empty_event": {
 			scenario: func(done func()) EventStreamFunc {
 				return func(ctx context.Context, handler EventHandler) error {
-					handler.Handle("a")
-					handler.Handle("")
-					handler.Handle("c")
+					handler.Handle(ctx, "a")
+					handler.Handle(ctx, "")
+					handler.Handle(ctx, "c")
 					time.Sleep(time.Millisecond * 10)
 					done()
 					return nil
@@ -116,11 +116,11 @@ func TestReconcilerWithLock(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 	c := New(obs, conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-			handler.Handle("a")
-			handler.Handle("b")
-			handler.Handle("c")
+			handler.Handle(ctx, "a")
+			handler.Handle(ctx, "b")
+			handler.Handle(ctx, "c")
 			time.Sleep(time.Millisecond * 20)
-			handler.Handle("c")
+			handler.Handle(ctx, "c")
 			time.Sleep(time.Millisecond * 10)
 			done()
 			return nil
@@ -156,7 +156,7 @@ func TestResyncLoopEventStream(t *testing.T) {
 	idChannel := make(chan string, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 
-	go stream.Subscribe(ctx, EventHandlerFunc(func(id string) error {
+	go stream.Subscribe(ctx, EventHandlerFunc(func(_ context.Context, id string) error {
 		idChannel <- id
 		return nil
 	}))
@@ -194,7 +194,7 @@ func TestReconcilerWithLockNeverLeader(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 	c := New(obs, conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-			handler.Handle("a")
+			handler.Handle(ctx, "a")
 			return nil
 		}),
 	})

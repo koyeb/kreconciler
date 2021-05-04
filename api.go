@@ -25,7 +25,7 @@ func DefaultConfig() Config {
 		// the number of times an item gets retried before dropping it
 		MaxItemRetries: 10,
 		// the size of the worker queue (outstanding reconciles)
-		WorkerQueueSize:       10000,
+		WorkerQueueSize:       2000,
 		LeaderElectionEnabled: true,
 		// the lowest possible time for a delay retry
 		DelayResolution: time.Millisecond * 250,
@@ -49,7 +49,7 @@ func (f HandlerFunc) Handle(ctx context.Context, id string) Result {
 
 type WorkerHasher interface {
 	// Route decides on which worker this item will go
-	Route(id string) int
+	Route(ctx context.Context, id string) (int, error)
 	// Count gives the total number of workers
 	Count() int
 }
@@ -62,13 +62,13 @@ func (d DefaultHasher) Count() int {
 	return int(d.Num)
 }
 
-func (d DefaultHasher) Route(id string) int {
+func (d DefaultHasher) Route(_ context.Context, id string) (int, error) {
 	if d.Num == 1 {
-		return 0
+		return 0, nil
 	}
 	algorithm := fnv.New32a()
 	algorithm.Write([]byte(id))
-	return int(algorithm.Sum32() % d.Num)
+	return int(algorithm.Sum32() % d.Num), nil
 }
 
 type Result struct {
@@ -96,15 +96,15 @@ type Error interface {
 	RetryDelay() time.Duration
 }
 
-type EventHandlerFunc func(jobId string) error
+type EventHandlerFunc func(ctx context.Context, jobId string) error
 
-func (f EventHandlerFunc) Handle(jobId string) error {
-	return f(jobId)
+func (f EventHandlerFunc) Handle(ctx context.Context, jobId string) error {
+	return f(ctx, jobId)
 }
 
 // Called whenever an event is triggered
 type EventHandler interface {
-	Handle(jobId string) error
+	Handle(ctx context.Context, jobId string) error
 }
 
 type EventStream interface {
@@ -121,15 +121,15 @@ func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) Ev
 	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_event_count")
 	errors := counter.Bind(label.Bool("error", true), label.String("stream", name))
 	ok := counter.Bind(label.Bool("error", false), label.String("stream", name))
-	return EventHandlerFunc(func(jobId string) (err error) {
+	return EventHandlerFunc(func(ctx context.Context, jobId string) (err error) {
 		defer func() {
 			if err != nil {
-				errors.Add(context.Background(), 1)
+				errors.Add(ctx, 1)
 			} else {
-				ok.Add(context.Background(), 1)
+				ok.Add(ctx, 1)
 			}
 		}()
-		err = child.Handle(jobId)
+		err = child.Handle(ctx, jobId)
 		return
 	})
 }

@@ -3,6 +3,7 @@ package reconciler
 import (
 	"context"
 	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
+	"github.com/pkg/errors"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/unit"
@@ -94,12 +95,15 @@ func (c *controller) Run(ctx context.Context) error {
 	return nil
 }
 
-func (c *controller) enqueue(id string) error {
+func (c *controller) enqueue(ctx context.Context, id string) error {
 	// Simply discard items with empty ids
 	if id == "" {
 		return nil
 	}
-	workerId := c.cfg.WorkerHasher.Route(id)
+	workerId, err := c.cfg.WorkerHasher.Route(ctx, id)
+	if err != nil {
+		return errors.Wrap(err, "WorkerHasher failed in assigning a worker")
+	}
 	return c.workers[workerId].Enqueue(id)
 }
 
@@ -133,7 +137,7 @@ func ResyncLoopEventStream(obs observability.Wrapper, duration time.Duration, li
 			successRecorder.Record(ctx, time.Since(start).Milliseconds())
 			for _, id := range elts {
 				// Listed objects enqueue as present.
-				err = handler.Handle(id)
+				err = handler.Handle(ctx, id)
 				if err != nil {
 					obs.SLog().Warnw("Failed handle in resync loop", "id", id, "error", err)
 				}
