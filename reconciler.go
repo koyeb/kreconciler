@@ -48,7 +48,7 @@ func (c *controller) Run(ctx context.Context) error {
 	}
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
-	for i := 0; i < c.cfg.WorkerHasher.Count(); i++ {
+	for i := 0; i < c.cfg.WorkerCount; i++ {
 		worker := newWorker(c, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.handler)
 		c.workers = append(c.workers, worker)
 		go func() {
@@ -100,9 +100,13 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 	if id == "" {
 		return nil
 	}
-	workerId, err := c.cfg.WorkerHasher.Route(ctx, id)
+	workerId, err := c.cfg.WorkerHasher.Route(ctx, id, c.cfg.WorkerCount)
 	if err != nil {
 		return errors.Wrap(err, "WorkerHasher failed in assigning a worker")
+	}
+	if workerId < 0 {
+		c.SLog().Debugw("Dropping item", "id", id)
+		return nil
 	}
 	return c.workers[workerId].Enqueue(id)
 }

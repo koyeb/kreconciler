@@ -9,30 +9,34 @@ import (
 )
 
 type Config struct {
-	MaxItemRetries        int
-	WorkerQueueSize       int
-	WorkerHasher          WorkerHasher
+	// MaxItemRetries the number of times an item gets retried before dropping it
+	MaxItemRetries int
+	// WorkerQueueSize the size of the worker queue (outstanding reconciles)
+	WorkerQueueSize int
+	// WorkerHasher the function to assign work between workers
+	WorkerHasher WorkerHasher
+	// WorkerCount the number of workers
+	WorkerCount int
+	// LeaderElectionEnabled whether or not we should use
 	LeaderElectionEnabled bool
-	DelayResolution       time.Duration
-	DelayQueueSize        int
-	MaxReconcileTime      time.Duration
+	// DelayResolution the lowest possible time for a delay retry
+	DelayResolution time.Duration
+	// DelayQueueSize the maximum number of items in the scheduled delay queue
+	DelayQueueSize int
+	// MaxReconcileTime the maximum time a handle of an item should take
+	MaxReconcileTime time.Duration
 }
 
 func DefaultConfig() Config {
 	return Config{
-		// the function to assign work between wrokers
-		WorkerHasher: DefaultHasher{Num: 1},
-		// the number of times an item gets retried before dropping it
-		MaxItemRetries: 10,
-		// the size of the worker queue (outstanding reconciles)
+		WorkerHasher:          DefaultHasher,
+		WorkerCount:           1,
+		MaxItemRetries:        10,
 		WorkerQueueSize:       2000,
 		LeaderElectionEnabled: true,
-		// the lowest possible time for a delay retry
-		DelayResolution: time.Millisecond * 250,
-		// the maximum number of items scheduled for retry
-		DelayQueueSize: 1000,
-		// the maximum time a handle of a should take
-		MaxReconcileTime: time.Second * 10,
+		DelayResolution:       time.Millisecond * 250,
+		DelayQueueSize:        1000,
+		MaxReconcileTime:      time.Second * 10,
 	}
 }
 
@@ -48,28 +52,23 @@ func (f HandlerFunc) Handle(ctx context.Context, id string) Result {
 }
 
 type WorkerHasher interface {
-	// Route decides on which worker this item will go
-	Route(ctx context.Context, id string) (int, error)
-	// Count gives the total number of workers
-	Count() int
+	// Route decides on which worker this item will go (return a value < 0 to drop this item), count is the number of items
+	Route(ctx context.Context, id string, count int) (int, error)
+}
+type WorkerHasherFunc func(ctx context.Context, id string, count int) (int, error)
+
+func (f WorkerHasherFunc) Route(ctx context.Context, id string, count int) (int, error) {
+	return f(ctx, id, count)
 }
 
-type DefaultHasher struct {
-	Num uint32
-}
-
-func (d DefaultHasher) Count() int {
-	return int(d.Num)
-}
-
-func (d DefaultHasher) Route(_ context.Context, id string) (int, error) {
-	if d.Num == 1 {
+var DefaultHasher = WorkerHasherFunc(func(_ context.Context, id string, count int) (int, error) {
+	if count == 1 {
 		return 0, nil
 	}
 	algorithm := fnv.New32a()
 	algorithm.Write([]byte(id))
-	return int(algorithm.Sum32() % d.Num), nil
-}
+	return int(algorithm.Sum32() % uint32(count)), nil
+})
 
 type Result struct {
 	// RequeueDelay the time to wait before requeing, ignored is Error is not nil

@@ -97,7 +97,7 @@ func TestReconciler(t *testing.T) {
 						conf = DefaultConfig()
 					}
 					conf.LeaderElectionEnabled = false
-					conf.WorkerHasher = DefaultHasher{Num: uint32(count)}
+					conf.WorkerCount = count
 					c := New(obs, conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
 					require.NoError(t, c.Run(ctx))
 
