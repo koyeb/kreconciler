@@ -10,6 +10,7 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/unit"
+	"go.uber.org/zap"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -33,7 +34,6 @@ type metrics struct {
 }
 
 type worker struct {
-	observability.Wrapper
 	sync.Mutex
 	queue       chan item
 	ticker      *time.Ticker
@@ -43,27 +43,29 @@ type worker struct {
 	objectLocks objectLocks
 	capacity    int
 	metrics     *metrics
+	log         *zap.SugaredLogger
+	tracer      trace.Tracer
 }
 
 func newWorker(obs observability.Wrapper, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
 	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
 	w := &worker{
-		Wrapper:     obs,
 		queue:       make(chan item, capacity+1), // TO handle the inflight item schedule
 		capacity:    capacity,
 		maxTries:    maxTries,
 		metrics:     &metrics{},
 		delayQueue:  newQueue(delayQueueSize, delayResolution),
 		objectLocks: newObjectLocks(capacity),
-		handler:     NewPanicHandler(obs, NewHandlerWithTimeout(handler, maxReconcileTime)),
+		handler:     NewPanicHandler(obs.SLog(), NewHandlerWithTimeout(handler, maxReconcileTime)),
+		tracer:      obs.Tracer(),
+		log:         obs.SLog(),
 	}
-	decorateMeter(w, id)
+	decorateMeter(w, metric.Must(obs.Meter()), id)
 
 	return w
 }
 
-func decorateMeter(w *worker, id int) {
-	meter := metric.Must(w.Meter())
+func decorateMeter(w *worker, meter metric.MeterMust, id int) {
 	w.metrics.queueSizeObserver = meter.NewInt64ValueObserver("kreconciler_worker_queue_size", func(ctx context.Context, result metric.Int64ObserverResult) {
 		result.Observe(int64(w.objectLocks.Size()), label.Int("workerId", id))
 	},
@@ -113,11 +115,12 @@ func decorateMeter(w *worker, id int) {
 	).Bind(label.Int("workerId", id))
 }
 
-func NewPanicHandler(obs observability.Wrapper, handler Handler) Handler {
+func NewPanicHandler(logger *zap.SugaredLogger, handler Handler) Handler {
 	return HandlerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
-				obs.SLogWithContext(ctx).Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
+				l := DecorateLogger(ctx, logger)
+				l.Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
 				if e, ok := err.(error); ok {
@@ -155,7 +158,7 @@ type item struct {
 var QueueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
-	ctx, _ := w.Tracer().Start(context.Background(), "reconcile",
+	ctx, _ := w.tracer.Start(context.Background(), "reconcile",
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithNewRoot(),
 		trace.WithAttributes(
@@ -169,12 +172,13 @@ func (w *worker) Enqueue(id string) error {
 func (w *worker) enqueue(i item) error {
 	i.lastEnqueueTime = time.Now()
 	parentSpan := trace.SpanFromContext(i.ctx)
+	l := DecorateLogger(i.ctx, w.log)
 	switch w.objectLocks.Take(i.id) {
 	case alreadyPresent:
 		w.metrics.enqueueAlreadyPresent.Add(i.ctx, 1)
 		parentSpan.SetStatus(codes.Ok, "already_present")
 		parentSpan.End()
-		w.SLog().Debug("Item already present in the queue, ignoring enqueue")
+		l.Debug("Item already present in the queue, ignoring enqueue")
 		return nil
 	case queueOverflow:
 		w.metrics.enqueueFull.Add(i.ctx, 1)
@@ -190,14 +194,15 @@ func (w *worker) enqueue(i item) error {
 }
 
 func (w *worker) Run(ctx context.Context) {
-	w.SLog().Info("worker started")
-	defer w.SLog().Info("worker stopped")
+	w.log.Info("worker started")
+	defer w.log.Info("worker stopped")
 	go w.delayQueue.run(ctx, func(_ time.Time, i interface{}) {
 		itm := i.(item)
-		w.SLog().Debugw("Reenqueuing item after delay", "object_id", itm.id)
+		l := DecorateLogger(itm.ctx, w.log)
+		l.Debugw("Reenqueuing item after delay", "object_id", itm.id)
 		err := w.enqueue(itm)
 		if err != nil {
-			w.SLog().Errorw("Failed reenqueing delayed item", "error", err)
+			l.Errorw("Failed reenqueing delayed item", "error", err)
 		}
 	})
 	for {
@@ -208,6 +213,7 @@ func (w *worker) Run(ctx context.Context) {
 			w.objectLocks.Free(itm.id)
 			parentSpan := trace.SpanFromContext(itm.ctx)
 			parentSpan.AddEvent("dequeue")
+			l := DecorateLogger(itm.ctx, w.log)
 			w.metrics.dequeue.Add(ctx, 1)
 			// process the object.
 			res := w.handle(itm)
@@ -217,7 +223,7 @@ func (w *worker) Run(ctx context.Context) {
 				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
 					parentSpan.SetStatus(codes.Error, "Max try exceeded")
 					parentSpan.End()
-					w.SLog().Errorw("Max retry exceeded, dropping item", "object_id", itm.id)
+					l.Errorw("Max retry exceeded, dropping item", "object_id", itm.id)
 					w.metrics.handleResultDropMaxTry.Add(ctx, 1)
 				} else {
 					if res.Error != nil {
@@ -228,18 +234,18 @@ func (w *worker) Run(ctx context.Context) {
 						w.metrics.delayWithoutError.Record(ctx, delay.Milliseconds())
 					}
 					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(label.Int64("schedule.millis", delay.Milliseconds()), label.Int("try_count", itm.tryCount), label.Int("max_try", itm.maxTries)))
-					w.SLog().Debugw("Delay item retry", "object_id", itm.id)
+					l.Debugw("Delay item retry", "object_id", itm.id)
 					err := w.delayQueue.schedule(itm, delay)
 					if err != nil {
 						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
 						parentSpan.RecordError(err)
 						parentSpan.End()
-						w.SLog().Errorw("Error scheduling delay", "error", err)
+						l.Errorw("Error scheduling delay", "error", err)
 					}
 				}
 			} else {
 				w.metrics.handleResultOk.Add(ctx, 1)
-				w.SLog().Infow("Done")
+				l.Infow("Done")
 				parentSpan.SetStatus(codes.Ok, "")
 				parentSpan.End()
 			}
@@ -248,12 +254,13 @@ func (w *worker) Run(ctx context.Context) {
 }
 
 func (w *worker) handle(i item) Result {
-	handleCtx, span := w.Tracer().Start(i.ctx, "handle",
+	handleCtx, span := w.tracer.Start(i.ctx, "handle",
 		trace.WithAttributes(
 			label.String("id", i.id),
 		),
 	)
-	w.SLog().Debugw("Get event for item", "object_id", i.id)
+	l := DecorateLogger(handleCtx, w.log)
+	l.Debugw("Get event for item", "object_id", i.id)
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds())
 	res := w.handler.Handle(handleCtx, i.id)
@@ -261,7 +268,7 @@ func (w *worker) handle(i item) Result {
 	if res.Error != nil {
 		span.RecordError(res.Error)
 		span.SetStatus(codes.Error, "")
-		w.SLog().Warnw("Failed reconcile loop", "object_id", i.id, "error", res.Error)
+		l.Warnw("Failed reconcile loop", "object_id", i.id, "error", res.Error)
 		w.metrics.handleLatencyError.Record(i.ctx, time.Since(start).Milliseconds())
 	} else {
 		span.SetStatus(codes.Ok, "")
