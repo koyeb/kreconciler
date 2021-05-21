@@ -2,8 +2,10 @@ package reconciler
 
 import (
 	"context"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/metric"
+	"go.uber.org/zap"
 	"hash/fnv"
 	"time"
 )
@@ -25,10 +27,13 @@ type Config struct {
 	DelayQueueSize int
 	// MaxReconcileTime the maximum time a handle of an item should take
 	MaxReconcileTime time.Duration
+	Observability    Observability
 }
 
 func DefaultConfig() Config {
+	l, _ := zap.NewProduction()
 	return Config{
+		Observability:         NewObservability(l.Sugar(), otel.GetMeterProvider(), otel.GetTracerProvider()),
 		WorkerHasher:          DefaultHasher,
 		WorkerCount:           1,
 		MaxItemRetries:        10,

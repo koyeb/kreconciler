@@ -3,7 +3,6 @@ package reconciler
 import (
 	"context"
 	"errors"
-	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"go.opentelemetry.io/otel/codes"
@@ -108,13 +107,13 @@ func TestWorker(t *testing.T) {
 
 	for n, tt := range testCases {
 		t.Run(n, func(t *testing.T) {
-			obs := observability.NewForTest(t)
 			ctx, done := context.WithCancel(context.Background())
 
 			mockHandler := new(handlerMock)
 			tt.mock(mockHandler)
 
-			worker := newWorker(obs, 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+			ot := obsForTest(t)
+			worker := newWorker(ot.Observability(), 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
 			wg := sync.WaitGroup{}
 
 			go func() {
@@ -138,7 +137,7 @@ func TestWorker(t *testing.T) {
 }
 
 func TestTraceWorker(t *testing.T) {
-	obs := observability.NewForTestMetrics(t)
+	obs := obsForTest(t)
 
 	ctx, done := context.WithCancel(context.Background())
 
@@ -147,7 +146,7 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Handle", mock.Anything, "b").Return(Result{})
 	mockHandler.On("Handle", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
-	worker := newWorker(obs, 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	worker := newWorker(obs.Observability(), 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
 	wg := sync.WaitGroup{}
 
 	go func() {

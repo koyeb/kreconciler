@@ -3,14 +3,11 @@ package reconciler
 import (
 	"context"
 	"errors"
-	"fmt"
-	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/trace"
 	"go.opentelemetry.io/otel/unit"
-	"go.uber.org/zap"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -43,24 +40,22 @@ type worker struct {
 	objectLocks objectLocks
 	capacity    int
 	metrics     *metrics
-	log         *zap.SugaredLogger
-	tracer      trace.Tracer
+	Observability
 }
 
-func newWorker(obs observability.Wrapper, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
-	obs = obs.NewChildWrapper(fmt.Sprintf("worker-%d", id))
+func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
+	obs.SugaredLogger = obs.SugaredLogger.With("worker-id", id)
 	w := &worker{
-		queue:       make(chan item, capacity+1), // TO handle the inflight item schedule
-		capacity:    capacity,
-		maxTries:    maxTries,
-		metrics:     &metrics{},
-		delayQueue:  newQueue(delayQueueSize, delayResolution),
-		objectLocks: newObjectLocks(capacity),
-		handler:     NewPanicHandler(obs.SLog(), NewHandlerWithTimeout(handler, maxReconcileTime)),
-		tracer:      obs.Tracer(),
-		log:         obs.SLog(),
+		Observability: obs,
+		queue:         make(chan item, capacity+1), // TO handle the inflight item schedule
+		capacity:      capacity,
+		maxTries:      maxTries,
+		metrics:       &metrics{},
+		delayQueue:    newQueue(delayQueueSize, delayResolution),
+		objectLocks:   newObjectLocks(capacity),
+		handler:       NewPanicHandler(obs, NewHandlerWithTimeout(handler, maxReconcileTime)),
 	}
-	decorateMeter(w, metric.Must(obs.Meter()), id)
+	decorateMeter(w, metric.Must(obs.Meter), id)
 
 	return w
 }
@@ -115,11 +110,11 @@ func decorateMeter(w *worker, meter metric.MeterMust, id int) {
 	).Bind(label.Int("workerId", id))
 }
 
-func NewPanicHandler(logger *zap.SugaredLogger, handler Handler) Handler {
+func NewPanicHandler(obs Observability, handler Handler) Handler {
 	return HandlerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
-				l := DecorateLogger(ctx, logger)
+				l := obs.LoggerWithCtx(ctx)
 				l.Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
@@ -158,7 +153,7 @@ type item struct {
 var QueueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
-	ctx, _ := w.tracer.Start(context.Background(), "reconcile",
+	ctx, _ := w.Observability.Start(context.Background(), "reconcile",
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithNewRoot(),
 		trace.WithAttributes(
@@ -172,7 +167,7 @@ func (w *worker) Enqueue(id string) error {
 func (w *worker) enqueue(i item) error {
 	i.lastEnqueueTime = time.Now()
 	parentSpan := trace.SpanFromContext(i.ctx)
-	l := DecorateLogger(i.ctx, w.log)
+	l := w.Observability.LoggerWithCtx(i.ctx)
 	switch w.objectLocks.Take(i.id) {
 	case alreadyPresent:
 		w.metrics.enqueueAlreadyPresent.Add(i.ctx, 1)
@@ -194,11 +189,11 @@ func (w *worker) enqueue(i item) error {
 }
 
 func (w *worker) Run(ctx context.Context) {
-	w.log.Info("worker started")
-	defer w.log.Info("worker stopped")
+	w.Info("worker started")
+	defer w.Info("worker stopped")
 	go w.delayQueue.run(ctx, func(_ time.Time, i interface{}) {
 		itm := i.(item)
-		l := DecorateLogger(itm.ctx, w.log)
+		l := w.Observability.LoggerWithCtx(ctx)
 		l.Debugw("Reenqueuing item after delay", "object_id", itm.id)
 		err := w.enqueue(itm)
 		if err != nil {
@@ -213,7 +208,7 @@ func (w *worker) Run(ctx context.Context) {
 			w.objectLocks.Free(itm.id)
 			parentSpan := trace.SpanFromContext(itm.ctx)
 			parentSpan.AddEvent("dequeue")
-			l := DecorateLogger(itm.ctx, w.log)
+			l := w.Observability.LoggerWithCtx(ctx)
 			w.metrics.dequeue.Add(ctx, 1)
 			// process the object.
 			res := w.handle(itm)
@@ -254,12 +249,12 @@ func (w *worker) Run(ctx context.Context) {
 }
 
 func (w *worker) handle(i item) Result {
-	handleCtx, span := w.tracer.Start(i.ctx, "handle",
+	handleCtx, span := w.Start(i.ctx, "handle",
 		trace.WithAttributes(
 			label.String("id", i.id),
 		),
 	)
-	l := DecorateLogger(handleCtx, w.log)
+	l := w.Observability.LoggerWithCtx(i.ctx)
 	l.Debugw("Get event for item", "object_id", i.id)
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds())

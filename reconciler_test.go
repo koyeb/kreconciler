@@ -3,7 +3,6 @@ package reconciler
 import (
 	"context"
 	"fmt"
-	"github.com/koyeb/api.koyeb.com/internal/pkg/observability"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"sync"
@@ -88,7 +87,7 @@ func TestReconciler(t *testing.T) {
 			// Because inside a worker everything should look serial we can always test with many workers
 			for _, count := range []int{1, 2, 4} {
 				t.Run(fmt.Sprintf("With %d workers", count), func(t *testing.T) {
-					obs := observability.NewForTest(t)
+					obs := obsForTest(t)
 					handler := countingHandler{}
 					ctx, done := context.WithCancel(context.Background())
 
@@ -98,7 +97,8 @@ func TestReconciler(t *testing.T) {
 					}
 					conf.LeaderElectionEnabled = false
 					conf.WorkerCount = count
-					c := New(obs, conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
+					conf.Observability = obs.Observability()
+					c := New(conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
 					require.NoError(t, c.Run(ctx))
 
 					tt.assert(t, c.(*controller), handler.Calls())
@@ -109,12 +109,13 @@ func TestReconciler(t *testing.T) {
 }
 
 func TestReconcilerWithLock(t *testing.T) {
-	obs := observability.NewForTest(t)
+	obs := obsForTest(t)
 	handler := &countingHandler{}
 
 	conf := DefaultConfig()
+	conf.Observability = obs.Observability()
 	ctx, done := context.WithCancel(context.Background())
-	c := New(obs, conf, handler, map[string]EventStream{
+	c := New(conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
 			handler.Handle(ctx, "a")
 			handler.Handle(ctx, "b")
@@ -149,8 +150,8 @@ func TestReconcilerWithLock(t *testing.T) {
 }
 
 func TestResyncLoopEventStream(t *testing.T) {
-	obs := observability.NewForTest(t)
-	stream := ResyncLoopEventStream(obs, time.Millisecond*50, func(ctx context.Context) ([]string, error) {
+	obs := obsForTest(t)
+	stream := ResyncLoopEventStream(obs.Observability(), time.Millisecond*50, func(ctx context.Context) ([]string, error) {
 		return []string{"a", "b", "c"}, nil
 	})
 	idChannel := make(chan string, 10)
@@ -186,13 +187,14 @@ func TestResyncLoopEventStream(t *testing.T) {
 }
 
 func TestReconcilerWithLockNeverLeader(t *testing.T) {
-	obs := observability.NewForTest(t)
+	obs := obsForTest(t)
 
 	handler := &countingHandler{}
 
 	conf := DefaultConfig()
+	conf.Observability = obs.Observability()
 	ctx, done := context.WithCancel(context.Background())
-	c := New(obs, conf, handler, map[string]EventStream{
+	c := New(conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
 			handler.Handle(ctx, "a")
 			return nil
