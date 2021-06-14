@@ -212,7 +212,7 @@ func (w *worker) Run(ctx context.Context) {
 			w.metrics.dequeue.Add(ctx, 1)
 			// process the object.
 			res := w.handle(itm)
-			delay := res.GetRequeueDelay(w.delayQueue.resolution)
+			delay := res.RequeueDelayWithDefault(w.delayQueue.resolution)
 			if delay != 0 {
 				itm.tryCount += 1
 				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {

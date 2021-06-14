@@ -2,12 +2,7 @@ package reconciler
 
 import (
 	"context"
-	"github.com/pkg/errors"
-	"go.opentelemetry.io/otel/label"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/unit"
 	"sync"
-	"time"
 )
 
 type Controller interface {
@@ -101,57 +96,11 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 	}
 	workerId, err := c.cfg.WorkerHasher.Route(ctx, id, c.cfg.WorkerCount)
 	if err != nil {
-		return errors.Wrap(err, "WorkerHasher failed in assigning a worker")
+		return err
 	}
 	if workerId < 0 {
 		c.Debugw("Dropping item", "id", id)
 		return nil
 	}
 	return c.workers[workerId].Enqueue(id)
-}
-
-func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn func(ctx context.Context) ([]string, error)) EventStream {
-	m := metric.Must(obs.Meter)
-	count := m.NewInt64Counter("kreconciler_stream_resync_item_count",
-		metric.WithUnit(unit.Dimensionless),
-		metric.WithDescription("Increased by the number of items returned by the listFn"),
-	)
-	recorder := m.NewInt64ValueRecorder("kreconciler_stream_resync_millis",
-		metric.WithUnit(unit.Milliseconds),
-		metric.WithDescription("time spent calling the listFn"),
-	)
-	errorRecorder := recorder.Bind(label.String("status", "error"))
-	successRecorder := recorder.Bind(label.String("status", "success"))
-	return EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-		ticker := time.NewTicker(duration)
-		for {
-			obs.Info("Running step of resync loop")
-			start := time.Now()
-			// Queue the objects to be handled.
-			elts, err := listFn(ctx)
-			if err != nil {
-				errorRecorder.Record(ctx, time.Since(start).Milliseconds())
-				obs.Errorw("Failed resync loop call", "error", err)
-				time.Sleep(time.Millisecond * 250)
-				continue
-			}
-			obs.Infow("Adding events", "count", len(elts))
-			count.Add(ctx, int64(len(elts)))
-			successRecorder.Record(ctx, time.Since(start).Milliseconds())
-			for _, id := range elts {
-				// Listed objects enqueue as present.
-				err = handler.Handle(ctx, id)
-				if err != nil {
-					obs.Warnw("Failed handle in resync loop", "id", id, "error", err)
-				}
-			}
-
-			select {
-			case <-ctx.Done():
-				obs.Info("Finished resync loop")
-				return nil
-			case <-ticker.C:
-			}
-		}
-	})
 }
