@@ -25,3 +25,6 @@ It's therefore necessary to make execution of the reconciler as observable as po
 At Koyeb we've built reconcilers that helps keeping our models in sync with [Hashicorp Nomad](https://www.nomadproject.io/) and [Kuma](kuma.io/).
 
 
+## Contributing
+
+See [Contributing](CONTRIBUTING.md).

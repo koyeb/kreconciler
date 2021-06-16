@@ -13,6 +13,7 @@ type Observability struct {
 	metric.Meter
 	trace.Tracer
 }
+
 var DefaultObservability = NewObservability(NoopLogger{}, otel.GetMeterProvider(), otel.GetTracerProvider())
 
 // LoggerWithCtx add the tracing context to the logger
@@ -25,7 +26,6 @@ func NewObservability(l Logger, m metric.MeterProvider, t trace.TracerProvider) 
 	return Observability{Logger: l, Meter: m.Meter("kreconciler"), Tracer: t.Tracer("kreconciler")}
 }
 
-
 type Logger interface {
 	With(keyValues ...interface{}) Logger
 	Debug(msg string, keyValues ...interface{})
@@ -34,7 +34,8 @@ type Logger interface {
 	Error(msg string, keyValues ...interface{})
 }
 
-type NoopLogger struct {}
+type NoopLogger struct{}
+
 func (n NoopLogger) With(keyValues ...interface{}) Logger {
 	return n
 }
@@ -50,4 +51,3 @@ func (n NoopLogger) Warn(msg string, keyValues ...interface{}) {
 
 func (n NoopLogger) Error(msg string, keyValues ...interface{}) {
 }
-

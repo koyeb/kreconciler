@@ -26,13 +26,13 @@ func (o obsTest) SpanRecorder() *oteltest.StandardSpanRecorder {
 func (o obsTest) Observability() Observability {
 	return Observability{
 		Logger: o.log,
-		Meter:         o.contr.MeterProvider().Meter("test"),
-		Tracer:        oteltest.NewTracerProvider(oteltest.WithSpanRecorder(o.sr)).Tracer("test"),
+		Meter:  o.contr.MeterProvider().Meter("test"),
+		Tracer: oteltest.NewTracerProvider(oteltest.WithSpanRecorder(o.sr)).Tracer("test"),
 	}
 }
 
 type testLog struct {
-	t *testing.T
+	t    *testing.T
 	args []string
 }
 
@@ -41,12 +41,12 @@ func (l testLog) With(kv ...interface{}) Logger {
 	for _, v := range l.args {
 		args = append(args, v)
 	}
-	for i := 0; i < len(kv); i+=2 {
+	for i := 0; i < len(kv); i += 2 {
 		args = append(args, fmt.Sprintf("%s=%v", kv[i], kv[i+1]))
 	}
 
 	return testLog{
-		t: l.t,
+		t:    l.t,
 		args: args,
 	}
 }
