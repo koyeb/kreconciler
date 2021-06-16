@@ -44,7 +44,7 @@ type worker struct {
 }
 
 func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
-	obs.SugaredLogger = obs.SugaredLogger.With("worker-id", id)
+	obs.Logger = obs.Logger.With("worker-id", id)
 	w := &worker{
 		Observability: obs,
 		queue:         make(chan item, capacity+1), // TO handle the inflight item schedule
@@ -115,7 +115,7 @@ func NewPanicHandler(obs Observability, handler Handler) Handler {
 		defer func() {
 			if err := recover(); err != nil {
 				l := obs.LoggerWithCtx(ctx)
-				l.Errorw("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
+				l.Error("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
 				if e, ok := err.(error); ok {
@@ -194,10 +194,10 @@ func (w *worker) Run(ctx context.Context) {
 	go w.delayQueue.run(ctx, func(_ time.Time, i interface{}) {
 		itm := i.(item)
 		l := w.Observability.LoggerWithCtx(ctx)
-		l.Debugw("Reenqueuing item after delay", "object_id", itm.id)
+		l.Debug("Reenqueuing item after delay", "object_id", itm.id)
 		err := w.enqueue(itm)
 		if err != nil {
-			l.Errorw("Failed reenqueing delayed item", "error", err)
+			l.Error("Failed reenqueing delayed item", "error", err)
 		}
 	})
 	for {
@@ -218,7 +218,7 @@ func (w *worker) Run(ctx context.Context) {
 				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
 					parentSpan.SetStatus(codes.Error, "Max try exceeded")
 					parentSpan.End()
-					l.Errorw("Max retry exceeded, dropping item", "object_id", itm.id)
+					l.Error("Max retry exceeded, dropping item", "object_id", itm.id)
 					w.metrics.handleResultDropMaxTry.Add(ctx, 1)
 				} else {
 					if res.Error != nil {
@@ -229,18 +229,18 @@ func (w *worker) Run(ctx context.Context) {
 						w.metrics.delayWithoutError.Record(ctx, delay.Milliseconds())
 					}
 					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(label.Int64("schedule.millis", delay.Milliseconds()), label.Int("try_count", itm.tryCount), label.Int("max_try", itm.maxTries)))
-					l.Debugw("Delay item retry", "object_id", itm.id)
+					l.Debug("Delay item retry", "object_id", itm.id)
 					err := w.delayQueue.schedule(itm, delay)
 					if err != nil {
 						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
 						parentSpan.RecordError(err)
 						parentSpan.End()
-						l.Errorw("Error scheduling delay", "error", err)
+						l.Error("Error scheduling delay", "error", err)
 					}
 				}
 			} else {
 				w.metrics.handleResultOk.Add(ctx, 1)
-				l.Infow("Done")
+				l.Info("Done")
 				parentSpan.SetStatus(codes.Ok, "")
 				parentSpan.End()
 			}
@@ -255,7 +255,7 @@ func (w *worker) handle(i item) Result {
 		),
 	)
 	l := w.Observability.LoggerWithCtx(i.ctx)
-	l.Debugw("Get event for item", "object_id", i.id)
+	l.Debug("Get event for item", "object_id", i.id)
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds())
 	res := w.handler.Handle(handleCtx, i.id)
@@ -263,7 +263,7 @@ func (w *worker) handle(i item) Result {
 	if res.Error != nil {
 		span.RecordError(res.Error)
 		span.SetStatus(codes.Error, "")
-		l.Warnw("Failed reconcile loop", "object_id", i.id, "error", res.Error)
+		l.Warn("Failed reconcile loop", "object_id", i.id, "error", res.Error)
 		w.metrics.handleLatencyError.Record(i.ctx, time.Since(start).Milliseconds())
 	} else {
 		span.SetStatus(codes.Ok, "")

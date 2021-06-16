@@ -2,11 +2,9 @@ package reconciler
 
 import (
 	"context"
-	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/label"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/unit"
-	"go.uber.org/zap"
 	"hash/fnv"
 	"time"
 )
@@ -34,9 +32,8 @@ type Config struct {
 }
 
 func DefaultConfig() Config {
-	l, _ := zap.NewProduction()
 	return Config{
-		Observability:         NewObservability(l.Sugar(), otel.GetMeterProvider(), otel.GetTracerProvider()),
+		Observability:         DefaultObservability,
 		WorkerHasher:          DefaultHasher,
 		WorkerCount:           1,
 		MaxItemRetries:        10,
@@ -182,18 +179,18 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			elts, err := listFn(ctx)
 			if err != nil {
 				errorRecorder.Record(ctx, time.Since(start).Milliseconds())
-				obs.Errorw("Failed resync loop call", "error", err)
+				obs.Error("Failed resync loop call", "error", err)
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
-			obs.Infow("Adding events", "count", len(elts))
+			obs.Info("Adding events", "count", len(elts))
 			count.Add(ctx, int64(len(elts)))
 			successRecorder.Record(ctx, time.Since(start).Milliseconds())
 			for _, id := range elts {
 				// Listed objects enqueue as present.
 				err = handler.Handle(ctx, id)
 				if err != nil {
-					obs.Warnw("Failed handle in resync loop", "id", id, "error", err)
+					obs.Warn("Failed handle in resync loop", "id", id, "error", err)
 				}
 			}
 

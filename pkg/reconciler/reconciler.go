@@ -22,7 +22,7 @@ type controller struct {
 }
 
 func (c *controller) BecomeLeader() {
-	c.Infow("Signaling we're becoming leader")
+	c.Info("Signaling we're becoming leader")
 	c.isLeader <- struct{}{}
 }
 
@@ -53,12 +53,12 @@ func (c *controller) Run(ctx context.Context) error {
 	}
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
-	c.Infow("Wait to become leader")
+	c.Info("Wait to become leader")
 	select {
 	case <-ctx.Done():
 		c.Info("Context terminated without ever being leader, never start streams.")
 	case <-c.isLeader:
-		c.Infow("Became leader, starting reconciler")
+		c.Info("Became leader, starting reconciler")
 		for name, stream := range c.eventStreams {
 			stream := stream
 			n := name
@@ -67,25 +67,25 @@ func (c *controller) Run(ctx context.Context) error {
 				defer c.streamWaitGroup.Done()
 				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue)))
 				if err != nil {
-					c.Errorw("Failed subscribing to stream", "error", err)
+					c.Error("Failed subscribing to stream", "error", err)
 				}
 			}()
 		}
 		// Wait until it's finished
 		<-ctx.Done()
-		c.Infow("Context terminated after being a leader")
+		c.Info("Context terminated after being a leader")
 	}
 
-	c.Infow("stopping controller...")
-	c.Infow("stopping streams...")
+	c.Info("stopping controller...")
+	c.Info("stopping streams...")
 	cancelStream()
 	c.streamWaitGroup.Wait()
-	c.Infow("stopped streams...")
-	c.Infow("stopping workers...")
+	c.Info("stopped streams...")
+	c.Info("stopping workers...")
 	cancelWorkers()
 	c.workerWaitGroup.Wait()
-	c.Infow("stopped workers...")
-	c.Infow("stopped controller...")
+	c.Info("stopped workers...")
+	c.Info("stopped controller...")
 	return nil
 }
 
@@ -99,7 +99,7 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 		return err
 	}
 	if workerId < 0 {
-		c.Debugw("Dropping item", "id", id)
+		c.Debug("Dropping item", "id", id)
 		return nil
 	}
 	return c.workers[workerId].Enqueue(id)
