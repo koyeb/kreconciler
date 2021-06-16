@@ -28,7 +28,7 @@ type Config struct {
 	// MaxReconcileTime the maximum time a handle of an item should take
 	MaxReconcileTime time.Duration
 	// Observability configuration for logs, metrics and traces
-	Observability    Observability
+	Observability Observability
 }
 
 func DefaultConfig() Config {
@@ -53,6 +53,7 @@ type Handler interface {
 
 // HandlerFunc see Handler
 type HandlerFunc func(ctx context.Context, id string) Result
+
 func (f HandlerFunc) Handle(ctx context.Context, id string) Result {
 	return f(ctx, id)
 }
@@ -84,7 +85,6 @@ type Error interface {
 	RetryDelay() time.Duration
 }
 
-
 // WorkerHasher specifies which of the control-loop workers should handle this specific item.
 type WorkerHasher interface {
 	// Route decide on which worker this item will go (return a value < 0 to drop this item), count is the number of items
@@ -93,6 +93,7 @@ type WorkerHasher interface {
 
 // WorkerHasherFunc see WorkerHasher
 type WorkerHasherFunc func(ctx context.Context, id string, count int) (int, error)
+
 func (f WorkerHasherFunc) Route(ctx context.Context, id string, count int) (int, error) {
 	return f(ctx, id, count)
 }
@@ -114,6 +115,7 @@ type EventHandler interface {
 
 // EventHandlerFunc see EventHandler
 type EventHandlerFunc func(ctx context.Context, jobId string) error
+
 func (f EventHandlerFunc) Handle(ctx context.Context, jobId string) error {
 	return f(ctx, jobId)
 }
@@ -145,6 +147,7 @@ type EventStream interface {
 
 // EventStreamFunc see EventStream
 type EventStreamFunc func(ctx context.Context, handler EventHandler) error
+
 func (f EventStreamFunc) Subscribe(ctx context.Context, handler EventHandler) error {
 	return f(ctx, handler)
 }
