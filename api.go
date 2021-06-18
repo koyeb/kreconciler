@@ -55,6 +55,7 @@ type Reconciler interface {
 // ReconcilerFunc see Reconciler
 type ReconcilerFunc func(ctx context.Context, id string) Result
 
+// Apply calls f(ctx, id).
 func (f ReconcilerFunc) Apply(ctx context.Context, id string) Result {
 	return f(ctx, id)
 }
@@ -72,9 +73,8 @@ func (r Result) RequeueDelayWithDefault(defaultDelay time.Duration) time.Duratio
 		er, ok := r.Error.(Error)
 		if !ok {
 			return defaultDelay
-		} else {
-			return er.RetryDelay()
 		}
+		return er.RetryDelay()
 	}
 	return r.RequeueDelay
 }
@@ -95,6 +95,7 @@ type WorkerHasher interface {
 // WorkerHasherFunc see WorkerHasher
 type WorkerHasherFunc func(ctx context.Context, id string, count int) (int, error)
 
+// Route calls f(ctx, id, count).
 func (f WorkerHasherFunc) Route(ctx context.Context, id string, count int) (int, error) {
 	return f(ctx, id, count)
 }
@@ -117,6 +118,7 @@ type EventHandler interface {
 // EventHandlerFunc see EventHandler
 type EventHandlerFunc func(ctx context.Context, jobId string) error
 
+// Call calls f(ctx, jobId).
 func (f EventHandlerFunc) Call(ctx context.Context, jobId string) error {
 	return f(ctx, jobId)
 }
@@ -149,6 +151,7 @@ type EventStream interface {
 // EventStreamFunc see EventStream
 type EventStreamFunc func(ctx context.Context, handler EventHandler) error
 
+// Subscribe calls f(ctx, handler)
 func (f EventStreamFunc) Subscribe(ctx context.Context, handler EventHandler) error {
 	return f(ctx, handler)
 }

@@ -47,18 +47,23 @@ type Logger interface {
 // NoopLogger a logger that does nothing
 type NoopLogger struct{}
 
+// With return self
 func (n NoopLogger) With(keyValues ...interface{}) Logger {
 	return n
 }
 
+// Debug noop
 func (n NoopLogger) Debug(msg string, keyValues ...interface{}) {
 }
 
+// Info noop
 func (n NoopLogger) Info(msg string, keyValues ...interface{}) {
 }
 
+// Warn noop
 func (n NoopLogger) Warn(msg string, keyValues ...interface{}) {
 }
 
+// Error noop
 func (n NoopLogger) Error(msg string, keyValues ...interface{}) {
 }

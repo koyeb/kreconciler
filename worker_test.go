@@ -74,7 +74,7 @@ func TestWorker(t *testing.T) {
 			actions: []action{
 				{id: "a"},
 				{id: "b"},
-				{id: "c", expectedErr: queueAtCapacityError},
+				{id: "c", expectedErr: errQueueAtCapacityError},
 			},
 			mock: func(m *handlerMock) {
 				m.On("Apply", mock.Anything, "a").Return(Result{})

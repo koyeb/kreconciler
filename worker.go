@@ -53,7 +53,7 @@ func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, de
 		metrics:       &metrics{},
 		delayQueue:    newQueue(delayQueueSize, delayResolution),
 		objectLocks:   newObjectLocks(capacity),
-		handler:       NewPanicHandler(obs, newHandlerWithTimeout(handler, maxReconcileTime)),
+		handler:       newPanicReconciler(obs, newReconcilerWithTimeout(handler, maxReconcileTime)),
 	}
 	decorateMeter(w, metric.Must(obs.Meter), id)
 
@@ -110,8 +110,7 @@ func decorateMeter(w *worker, meter metric.MeterMust, id int) {
 	).Bind(label.Int("workerId", id))
 }
 
-// A
-func NewPanicHandler(obs Observability, handler Reconciler) Reconciler {
+func newPanicReconciler(obs Observability, delegate Reconciler) Reconciler {
 	return ReconcilerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
@@ -126,19 +125,20 @@ func NewPanicHandler(obs Observability, handler Reconciler) Reconciler {
 				}
 			}
 		}()
-		r = handler.Apply(ctx, id)
+		r = delegate.Apply(ctx, id)
 		return
 	})
 }
 
-func newHandlerWithTimeout(handler Reconciler, timeout time.Duration) Reconciler {
+func newReconcilerWithTimeout(delegate Reconciler, timeout time.Duration) Reconciler {
+	if timeout == 0 {
+		return delegate
+	}
 	return ReconcilerFunc(func(ctx context.Context, id string) Result {
-		if timeout != 0 {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, timeout)
-			defer cancel()
-		}
-		return handler.Apply(ctx, id)
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return delegate.Apply(ctx, id)
 	})
 }
 
@@ -151,7 +151,7 @@ type item struct {
 	lastEnqueueTime  time.Time
 }
 
-var queueAtCapacityError = errors.New("queue at capacity, retry later")
+var errQueueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
 	ctx, _ := w.Observability.Start(context.Background(), "reconcile",
@@ -180,7 +180,7 @@ func (w *worker) enqueue(i item) error {
 		w.metrics.enqueueFull.Add(i.ctx, 1)
 		parentSpan.SetStatus(codes.Error, "queue_full")
 		parentSpan.End()
-		return queueAtCapacityError
+		return errQueueAtCapacityError
 	default:
 		w.metrics.enqueueOk.Add(i.ctx, 1)
 		parentSpan.AddEvent("enqueue")
