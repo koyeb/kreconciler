@@ -60,6 +60,7 @@ func (f ReconcilerFunc) Apply(ctx context.Context, id string) Result {
 	return f(ctx, id)
 }
 
+// Result a wrapper that is returned by a Reconciler.
 type Result struct {
 	// RequeueDelay the time to wait before requeing, ignored is Error is not nil
 	RequeueDelay time.Duration
