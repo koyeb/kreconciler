@@ -12,3 +12,6 @@ test:
 	go test -v ./...
 
 check: tidy fmt vet test
+
+publish: # Forces refresh of go.dev
+	GOPROXY=https://proxy.golang.org go get github.com/koyeb/kreconciler
