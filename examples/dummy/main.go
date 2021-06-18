@@ -29,13 +29,13 @@ func main() {
 		"resync": kreconciler.ResyncLoopEventStream(cfg.Observability, time.Second*5, func(ctx context.Context) ([]string, error) {
 			return allItems, nil
 		}),
-		"random5s": TickEventStream(5*time.Second, allItems),
-		"random1s": TickEventStream(time.Second, allItems),
+		"random5s": tickEventStream(5*time.Second, allItems),
+		"random1s": tickEventStream(time.Second, allItems),
 	}).Run(ctx)
 	fmt.Printf("Finished running err='%v'", err)
 }
 
-func TickEventStream(duration time.Duration, items []string) kreconciler.EventStream {
+func tickEventStream(duration time.Duration, items []string) kreconciler.EventStream {
 	return kreconciler.EventStreamFunc(func(ctx context.Context, handler kreconciler.EventHandler) error {
 		t := time.Tick(duration)
 		for {
