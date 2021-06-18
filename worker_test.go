@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
@@ -34,11 +34,11 @@ func TestWorker(t *testing.T) {
 				{id: "b"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", mock.Anything, "a").Return(Result{})
-				m.On("Handle", mock.Anything, "b").Return(Result{})
+				m.On("Apply", mock.Anything, "a").Return(Result{})
+				m.On("Apply", mock.Anything, "b").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
-				m.AssertNumberOfCalls(t, "Handle", 2)
+				m.AssertNumberOfCalls(t, "Apply", 2)
 			},
 		},
 		"insertSameNoDupe": {
@@ -49,10 +49,10 @@ func TestWorker(t *testing.T) {
 				{id: "a"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", mock.Anything, "a").Return(Result{})
+				m.On("Apply", mock.Anything, "a").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
-				m.AssertNumberOfCalls(t, "Handle", 1)
+				m.AssertNumberOfCalls(t, "Apply", 1)
 			},
 		},
 		"retriesDrop": {
@@ -63,10 +63,10 @@ func TestWorker(t *testing.T) {
 				{id: "a"},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
+				m.On("Apply", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
-				m.AssertNumberOfCalls(t, "Handle", 2)
+				m.AssertNumberOfCalls(t, "Apply", 2)
 			},
 		},
 		"atCapacityFails": {
@@ -74,15 +74,15 @@ func TestWorker(t *testing.T) {
 			actions: []action{
 				{id: "a"},
 				{id: "b"},
-				{id: "c", expectedErr: QueueAtCapacityError},
+				{id: "c", expectedErr: queueAtCapacityError},
 			},
 			mock: func(m *handlerMock) {
-				m.On("Handle", mock.Anything, "a").Return(Result{})
-				m.On("Handle", mock.Anything, "b").Return(Result{})
+				m.On("Apply", mock.Anything, "a").Return(Result{})
+				m.On("Apply", mock.Anything, "b").Return(Result{})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
-				m.AssertNumberOfCalls(t, "Handle", 2)
-				m.AssertNotCalled(t, "Handle", mock.Anything, "c")
+				m.AssertNumberOfCalls(t, "Apply", 2)
+				m.AssertNotCalled(t, "Apply", mock.Anything, "c")
 			},
 		},
 		"takeTooLong": {
@@ -93,14 +93,14 @@ func TestWorker(t *testing.T) {
 			maxTries:    2,
 			maxDuration: time.Millisecond * 100,
 			mock: func(m *handlerMock) {
-				m.On("Handle", mock.Anything, "a").After(time.Millisecond * 200).Run(func(args mock.Arguments) {
+				m.On("Apply", mock.Anything, "a").After(time.Millisecond * 200).Run(func(args mock.Arguments) {
 					assert.Equal(t, context.DeadlineExceeded, args.Get(0).(context.Context).Err())
 				}).Return(Result{Error: context.DeadlineExceeded})
 			},
 			assert: func(t *testing.T, m *handlerMock) {
-				m.AssertNumberOfCalls(t, "Handle", 2)
-				m.AssertNotCalled(t, "Handle", "b")
-				m.AssertNotCalled(t, "Handle", "c")
+				m.AssertNumberOfCalls(t, "Apply", 2)
+				m.AssertNotCalled(t, "Apply", "b")
+				m.AssertNotCalled(t, "Apply", "c")
 			},
 		},
 	}
@@ -142,9 +142,9 @@ func TestTraceWorker(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 
 	mockHandler := new(handlerMock)
-	mockHandler.On("Handle", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
-	mockHandler.On("Handle", mock.Anything, "b").Return(Result{})
-	mockHandler.On("Handle", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
+	mockHandler.On("Apply", mock.Anything, "a").Return(Result{Error: errors.New("not good")})
+	mockHandler.On("Apply", mock.Anything, "b").Return(Result{})
+	mockHandler.On("Apply", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
 	worker := newWorker(obs.Observability(), 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
 	wg := sync.WaitGroup{}
@@ -203,7 +203,7 @@ type handlerMock struct {
 	mock.Mock
 }
 
-func (h *handlerMock) Handle(ctx context.Context, id string) Result {
+func (h *handlerMock) Apply(ctx context.Context, id string) Result {
 	res := h.Called(ctx, id)
 	return res.Get(0).(Result)
 }

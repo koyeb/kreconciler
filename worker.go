@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
@@ -36,14 +36,14 @@ type worker struct {
 	ticker      *time.Ticker
 	delayQueue  *dq
 	maxTries    int
-	handler     Handler
+	handler     Reconciler
 	objectLocks objectLocks
 	capacity    int
 	metrics     *metrics
 	Observability
 }
 
-func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Handler) *worker {
+func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Reconciler) *worker {
 	obs.Logger = obs.Logger.With("worker-id", id)
 	w := &worker{
 		Observability: obs,
@@ -53,7 +53,7 @@ func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, de
 		metrics:       &metrics{},
 		delayQueue:    newQueue(delayQueueSize, delayResolution),
 		objectLocks:   newObjectLocks(capacity),
-		handler:       NewPanicHandler(obs, NewHandlerWithTimeout(handler, maxReconcileTime)),
+		handler:       NewPanicHandler(obs, newHandlerWithTimeout(handler, maxReconcileTime)),
 	}
 	decorateMeter(w, metric.Must(obs.Meter), id)
 
@@ -110,12 +110,13 @@ func decorateMeter(w *worker, meter metric.MeterMust, id int) {
 	).Bind(label.Int("workerId", id))
 }
 
-func NewPanicHandler(obs Observability, handler Handler) Handler {
-	return HandlerFunc(func(ctx context.Context, id string) (r Result) {
+// A
+func NewPanicHandler(obs Observability, handler Reconciler) Reconciler {
+	return ReconcilerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
 				l := obs.LoggerWithCtx(ctx)
-				l.Error("Panicked inside an handler", "error", err, "stack", string(debug.Stack()))
+				l.Error("Panicked inside an reconciler", "error", err, "stack", string(debug.Stack()))
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
 				if e, ok := err.(error); ok {
@@ -125,19 +126,19 @@ func NewPanicHandler(obs Observability, handler Handler) Handler {
 				}
 			}
 		}()
-		r = handler.Handle(ctx, id)
+		r = handler.Apply(ctx, id)
 		return
 	})
 }
 
-func NewHandlerWithTimeout(handler Handler, timeout time.Duration) Handler {
-	return HandlerFunc(func(ctx context.Context, id string) Result {
+func newHandlerWithTimeout(handler Reconciler, timeout time.Duration) Reconciler {
+	return ReconcilerFunc(func(ctx context.Context, id string) Result {
 		if timeout != 0 {
 			var cancel context.CancelFunc
 			ctx, cancel = context.WithTimeout(ctx, timeout)
 			defer cancel()
 		}
-		return handler.Handle(ctx, id)
+		return handler.Apply(ctx, id)
 	})
 }
 
@@ -150,7 +151,7 @@ type item struct {
 	lastEnqueueTime  time.Time
 }
 
-var QueueAtCapacityError = errors.New("queue at capacity, retry later")
+var queueAtCapacityError = errors.New("queue at capacity, retry later")
 
 func (w *worker) Enqueue(id string) error {
 	ctx, _ := w.Observability.Start(context.Background(), "reconcile",
@@ -169,17 +170,17 @@ func (w *worker) enqueue(i item) error {
 	parentSpan := trace.SpanFromContext(i.ctx)
 	l := w.Observability.LoggerWithCtx(i.ctx)
 	switch w.objectLocks.Take(i.id) {
-	case alreadyPresent:
+	case errAlreadyPresent:
 		w.metrics.enqueueAlreadyPresent.Add(i.ctx, 1)
 		parentSpan.SetStatus(codes.Ok, "already_present")
 		parentSpan.End()
-		l.Debug("Item already present in the queue, ignoring enqueue")
+		l.Debug("Item already present in the queue, ignoring enqueue", "object_id", i.id)
 		return nil
-	case queueOverflow:
+	case errQueueOverflow:
 		w.metrics.enqueueFull.Add(i.ctx, 1)
 		parentSpan.SetStatus(codes.Error, "queue_full")
 		parentSpan.End()
-		return QueueAtCapacityError
+		return queueAtCapacityError
 	default:
 		w.metrics.enqueueOk.Add(i.ctx, 1)
 		parentSpan.AddEvent("enqueue")
@@ -240,7 +241,7 @@ func (w *worker) Run(ctx context.Context) {
 				}
 			} else {
 				w.metrics.handleResultOk.Add(ctx, 1)
-				l.Info("Done")
+				l.Debug("Done", "object_id", itm.id)
 				parentSpan.SetStatus(codes.Ok, "")
 				parentSpan.End()
 			}
@@ -254,11 +255,12 @@ func (w *worker) handle(i item) Result {
 			label.String("id", i.id),
 		),
 	)
+	defer span.End()
 	l := w.Observability.LoggerWithCtx(i.ctx)
 	l.Debug("Get event for item", "object_id", i.id)
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds())
-	res := w.handler.Handle(handleCtx, i.id)
+	res := w.handler.Apply(handleCtx, i.id)
 	// Retry if required based on the result.
 	if res.Error != nil {
 		span.RecordError(res.Error)
@@ -269,6 +271,5 @@ func (w *worker) handle(i item) Result {
 		span.SetStatus(codes.Ok, "")
 		w.metrics.handleLatencySuccess.Record(i.ctx, time.Since(start).Milliseconds())
 	}
-	span.End()
 	return res
 }

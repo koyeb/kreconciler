@@ -1,12 +1,15 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
 	"sync"
 )
 
+// Controller the core interface to define a control-loop
 type Controller interface {
+	// Run execute the control-loop until the context is cancelled
 	Run(ctx context.Context) error
+	// BecomeLeader notify that this controller is now leader and that it should start the control-loop
 	BecomeLeader()
 }
 
@@ -14,7 +17,7 @@ type controller struct {
 	Observability
 	cfg             Config
 	workers         []*worker
-	handler         Handler
+	reconciler      Reconciler
 	eventStreams    map[string]EventStream
 	streamWaitGroup sync.WaitGroup
 	workerWaitGroup sync.WaitGroup
@@ -26,11 +29,12 @@ func (c *controller) BecomeLeader() {
 	c.isLeader <- struct{}{}
 }
 
-func New(config Config, handler Handler, streams map[string]EventStream) Controller {
+// New create a new controller
+func New(config Config, reconciler Reconciler, streams map[string]EventStream) Controller {
 	return &controller{
 		Observability: config.Observability,
 		cfg:           config,
-		handler:       handler,
+		reconciler:    reconciler,
 		eventStreams:  streams,
 		isLeader:      make(chan struct{}, 1),
 	}
@@ -43,7 +47,7 @@ func (c *controller) Run(ctx context.Context) error {
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
 	for i := 0; i < c.cfg.WorkerCount; i++ {
-		worker := newWorker(c.Observability, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.handler)
+		worker := newWorker(c.Observability, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
 		c.workers = append(c.workers, worker)
 		go func() {
 			c.workerWaitGroup.Add(1)

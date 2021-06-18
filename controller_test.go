@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
@@ -15,7 +15,7 @@ type countingHandler struct {
 	calls map[string]int
 }
 
-func (h *countingHandler) Handle(ctx context.Context, id string) Result {
+func (h *countingHandler) Apply(ctx context.Context, id string) Result {
 	h.Lock()
 	defer h.Unlock()
 	if h.calls == nil {
@@ -44,11 +44,11 @@ func TestReconciler(t *testing.T) {
 		"simple": {
 			scenario: func(done func()) EventStreamFunc {
 				return func(ctx context.Context, handler EventHandler) error {
-					handler.Handle(ctx, "a")
-					handler.Handle(ctx, "b")
-					handler.Handle(ctx, "c")
+					handler.Call(ctx, "a")
+					handler.Call(ctx, "b")
+					handler.Call(ctx, "c")
 					time.Sleep(time.Millisecond * 20)
-					handler.Handle(ctx, "c")
+					handler.Call(ctx, "c")
 					time.Sleep(time.Millisecond * 10)
 					done()
 					return nil
@@ -65,9 +65,9 @@ func TestReconciler(t *testing.T) {
 		"ignore_empty_event": {
 			scenario: func(done func()) EventStreamFunc {
 				return func(ctx context.Context, handler EventHandler) error {
-					handler.Handle(ctx, "a")
-					handler.Handle(ctx, "")
-					handler.Handle(ctx, "c")
+					handler.Call(ctx, "a")
+					handler.Call(ctx, "")
+					handler.Call(ctx, "c")
 					time.Sleep(time.Millisecond * 10)
 					done()
 					return nil
@@ -117,11 +117,11 @@ func TestReconcilerWithLock(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 	c := New(conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-			handler.Handle(ctx, "a")
-			handler.Handle(ctx, "b")
-			handler.Handle(ctx, "c")
+			handler.Call(ctx, "a")
+			handler.Call(ctx, "b")
+			handler.Call(ctx, "c")
 			time.Sleep(time.Millisecond * 20)
-			handler.Handle(ctx, "c")
+			handler.Call(ctx, "c")
 			time.Sleep(time.Millisecond * 10)
 			done()
 			return nil
@@ -196,7 +196,7 @@ func TestReconcilerWithLockNeverLeader(t *testing.T) {
 	ctx, done := context.WithCancel(context.Background())
 	c := New(conf, handler, map[string]EventStream{
 		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
-			handler.Handle(ctx, "a")
+			handler.Call(ctx, "a")
 			return nil
 		}),
 	})

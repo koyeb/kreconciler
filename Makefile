@@ -12,4 +12,3 @@ test:
 	go test -v ./...
 
 check: tidy fmt vet test
-

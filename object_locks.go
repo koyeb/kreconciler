@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"errors"
@@ -12,8 +12,8 @@ type objectLocks struct {
 	objects  map[string]bool
 }
 
-var alreadyPresent = errors.New("item already present")
-var queueOverflow = errors.New("queue is at capacity")
+var errAlreadyPresent = errors.New("item already present")
+var errQueueOverflow = errors.New("queue is at capacity")
 
 func newObjectLocks(capacity int) objectLocks {
 	return objectLocks{
@@ -26,13 +26,13 @@ func (o *objectLocks) Take(id string) error {
 	o.m.Lock()
 	defer o.m.Unlock()
 	if len(o.objects) == o.capacity {
-		return queueOverflow
+		return errQueueOverflow
 	}
 	if _, ok := o.objects[id]; !ok {
 		o.objects[id] = true
 		return nil
 	}
-	return alreadyPresent
+	return errAlreadyPresent
 }
 
 func (o *objectLocks) Free(id string) {

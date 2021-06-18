@@ -1,5 +1,9 @@
 # kreconciler
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/koyeb/kreconciler)](https://goreportcard.com/report/github.com/koyeb/kreconciler)
+[![Go Reference](https://pkg.go.dev/badge/github.com/koyeb/kreconciler.svg)](https://pkg.go.dev/github.com/koyeb/kreconciler)
+[![Release](https://img.shields.io/github/release/koyeb/kreconciler.svg?style=flat-square)](https://github.com/koyeb/kreconciler/releases/latest)
+
 A library to build control-loops for things other than Kubernetes.
 
 ## Principle

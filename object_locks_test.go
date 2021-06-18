@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"github.com/stretchr/testify/assert"
@@ -35,9 +35,9 @@ func TestObjectLocks(t *testing.T) {
 		"insertsMultiNoDupe": {
 			inserts: []operation{
 				{insert: true, id: "a"},
-				{insert: true, id: "a", expectedError: alreadyPresent},
+				{insert: true, id: "a", expectedError: errAlreadyPresent},
 				{insert: true, id: "b"},
-				{insert: true, id: "b", expectedError: alreadyPresent},
+				{insert: true, id: "b", expectedError: errAlreadyPresent},
 			},
 			capacity: 4,
 			endMap:   map[string]bool{"a": true, "b": true},
@@ -46,7 +46,7 @@ func TestObjectLocks(t *testing.T) {
 			inserts: []operation{
 				{insert: true, id: "a"},
 				{insert: true, id: "b"},
-				{insert: true, id: "c", expectedError: queueOverflow},
+				{insert: true, id: "c", expectedError: errQueueOverflow},
 			},
 			capacity: 2,
 			endMap:   map[string]bool{"a": true, "b": true},
@@ -55,7 +55,7 @@ func TestObjectLocks(t *testing.T) {
 			inserts: []operation{
 				{insert: true, id: "a"},
 				{insert: true, id: "b"},
-				{insert: true, id: "c", expectedError: queueOverflow},
+				{insert: true, id: "c", expectedError: errQueueOverflow},
 				{insert: false, id: "b"},
 				{insert: true, id: "c"},
 			},

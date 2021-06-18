@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
@@ -14,7 +14,10 @@ type Observability struct {
 	trace.Tracer
 }
 
-var DefaultObservability = NewObservability(NoopLogger{}, otel.GetMeterProvider(), otel.GetTracerProvider())
+// DefaultObservability uses noopLogger and otel.GetMeter and otel.GetTracer
+func DefaultObservability() Observability {
+	return NewObservability(NoopLogger{}, otel.GetMeterProvider(), otel.GetTracerProvider())
+}
 
 // LoggerWithCtx add the tracing context to the logger
 func (o Observability) LoggerWithCtx(ctx context.Context) Logger {
@@ -22,18 +25,26 @@ func (o Observability) LoggerWithCtx(ctx context.Context) Logger {
 	return o.Logger.With("spanId", spanCtx.SpanID.String(), "traceId", spanCtx.TraceID.String())
 }
 
+// NewObservability create a new observability wraooer (usually easier to use DefaultObservability)
 func NewObservability(l Logger, m metric.MeterProvider, t trace.TracerProvider) Observability {
 	return Observability{Logger: l, Meter: m.Meter("kreconciler"), Tracer: t.Tracer("kreconciler")}
 }
 
+// Logger a wrapper for your logger implementation
 type Logger interface {
+	// With create a new logger with fixed keys
 	With(keyValues ...interface{}) Logger
+	// Debug log at debug level
 	Debug(msg string, keyValues ...interface{})
+	// Info log at debug level
 	Info(msg string, keyValues ...interface{})
+	// Warn log at debug level
 	Warn(msg string, keyValues ...interface{})
+	// Error log at debug level
 	Error(msg string, keyValues ...interface{})
 }
 
+// NoopLogger a logger that does nothing
 type NoopLogger struct{}
 
 func (n NoopLogger) With(keyValues ...interface{}) Logger {

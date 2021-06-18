@@ -1,4 +1,4 @@
-package reconciler
+package kreconciler
 
 import (
 	"context"
@@ -31,9 +31,10 @@ type Config struct {
 	Observability Observability
 }
 
+// DefaultConfig a good set of configuration to get started
 func DefaultConfig() Config {
 	return Config{
-		Observability:         DefaultObservability,
+		Observability:         DefaultObservability(),
 		WorkerHasher:          DefaultHasher,
 		WorkerCount:           1,
 		MaxItemRetries:        10,
@@ -45,16 +46,16 @@ func DefaultConfig() Config {
 	}
 }
 
-// Handler is the core implementation of the control-loop.
-type Handler interface {
-	// Handle handle the item and potentially return an error
-	Handle(ctx context.Context, id string) Result
+// Reconciler is the core implementation of the control-loop.
+type Reconciler interface {
+	// Apply handle the item and potentially return an error
+	Apply(ctx context.Context, id string) Result
 }
 
-// HandlerFunc see Handler
-type HandlerFunc func(ctx context.Context, id string) Result
+// ReconcilerFunc see Reconciler
+type ReconcilerFunc func(ctx context.Context, id string) Result
 
-func (f HandlerFunc) Handle(ctx context.Context, id string) Result {
+func (f ReconcilerFunc) Apply(ctx context.Context, id string) Result {
 	return f(ctx, id)
 }
 
@@ -108,19 +109,19 @@ var DefaultHasher = WorkerHasherFunc(func(_ context.Context, id string, count in
 	return int(algorithm.Sum32() % uint32(count)), nil
 })
 
-// Called whenever an event is triggered
+// EventHandler called whenever an event is triggered
 type EventHandler interface {
-	Handle(ctx context.Context, jobId string) error
+	Call(ctx context.Context, jobId string) error
 }
 
 // EventHandlerFunc see EventHandler
 type EventHandlerFunc func(ctx context.Context, jobId string) error
 
-func (f EventHandlerFunc) Handle(ctx context.Context, jobId string) error {
+func (f EventHandlerFunc) Call(ctx context.Context, jobId string) error {
 	return f(ctx, jobId)
 }
 
-// MeteredEventHandler adds metrics any event handler
+// MeteredEventHandler adds metrics any event reconciler
 func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) EventHandler {
 	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_event_count")
 	errors := counter.Bind(label.Bool("error", true), label.String("stream", name))
@@ -133,12 +134,12 @@ func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) Ev
 				ok.Add(ctx, 1)
 			}
 		}()
-		err = child.Handle(ctx, jobId)
+		err = child.Call(ctx, jobId)
 		return
 	})
 }
 
-// EventStream calls `handler` whenever a new event is triggered.
+// EventStream calls `reconciler` whenever a new event is triggered.
 // Examples of EventStreams are: "KafkaConsumers", "PubSub systems", "Nomad event stream".
 // It's usually a way to signal that an external change happened and that we should rerun the control loop for the element with a given id.
 type EventStream interface {
@@ -191,7 +192,7 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			successRecorder.Record(ctx, time.Since(start).Milliseconds())
 			for _, id := range elts {
 				// Listed objects enqueue as present.
-				err = handler.Handle(ctx, id)
+				err = handler.Call(ctx, id)
 				if err != nil {
 					obs.Warn("Failed handle in resync loop", "id", id, "error", err)
 				}
