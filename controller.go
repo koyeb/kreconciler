@@ -58,11 +58,26 @@ func (c *controller) Run(ctx context.Context) error {
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
 	c.Info("Wait to become leader")
+
+	defer func() {
+		c.Info("stopping controller...")
+		c.Info("stopping streams...")
+		cancelStream()
+		c.streamWaitGroup.Wait()
+		c.Info("stopped streams...")
+		c.Info("stopping workers...")
+		cancelWorkers()
+		c.workerWaitGroup.Wait()
+		c.Info("stopped workers...")
+		c.Info("stopped controller...")
+	}()
+
 	select {
 	case <-ctx.Done():
 		c.Info("Context terminated without ever being leader, never start streams.")
 	case <-c.isLeader:
 		c.Info("Became leader, starting reconciler")
+		errChan := make(chan error, 1)
 		for name, stream := range c.eventStreams {
 			stream := stream
 			n := name
@@ -72,24 +87,19 @@ func (c *controller) Run(ctx context.Context) error {
 				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue)))
 				if err != nil {
 					c.Error("Failed subscribing to stream", "error", err)
+					errChan <- err
 				}
 			}()
 		}
 		// Wait until it's finished
-		<-ctx.Done()
-		c.Info("Context terminated after being a leader")
+		select {
+		case <-ctx.Done():
+			c.Info("Context terminated after being a leader")
+		case err := <-errChan:
+			return err
+		}
 	}
 
-	c.Info("stopping controller...")
-	c.Info("stopping streams...")
-	cancelStream()
-	c.streamWaitGroup.Wait()
-	c.Info("stopped streams...")
-	c.Info("stopping workers...")
-	cancelWorkers()
-	c.workerWaitGroup.Wait()
-	c.Info("stopped workers...")
-	c.Info("stopped controller...")
 	return nil
 }
 
