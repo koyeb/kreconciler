@@ -87,7 +87,7 @@ func (c *controller) Run(ctx context.Context) error {
 				defer c.streamWaitGroup.Done()
 				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue)))
 				if err != nil {
-					c.Error("Failed subscribing to stream", "error", err)
+					c.Error("Failed subscribing to stream", "error", err, "stream", n)
 					errChan <- err
 				}
 			}()
