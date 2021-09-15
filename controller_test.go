@@ -2,6 +2,7 @@ package kreconciler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -106,6 +107,22 @@ func TestReconciler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestEventStreamError(t *testing.T) {
+	obs := obsForTest(t)
+	handler := &countingHandler{}
+
+	conf := DefaultConfig()
+	conf.Observability = obs.Observability()
+	conf.LeaderElectionEnabled = false
+	c := New(conf, handler, map[string]EventStream{
+		"default": EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
+			return errors.New("oops")
+		}),
+	})
+
+	require.Error(t, c.Run(context.Background()))
 }
 
 func TestReconcilerWithLock(t *testing.T) {
