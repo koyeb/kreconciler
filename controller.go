@@ -22,7 +22,6 @@ type controller struct {
 	streamWaitGroup sync.WaitGroup
 	workerWaitGroup sync.WaitGroup
 	isLeader        chan struct{}
-	errChan         chan error
 }
 
 func (c *controller) BecomeLeader() {
@@ -38,7 +37,6 @@ func New(config Config, reconciler Reconciler, streams map[string]EventStream) C
 		reconciler:    reconciler,
 		eventStreams:  streams,
 		isLeader:      make(chan struct{}, 1),
-		errChan:       make(chan error, 1),
 	}
 }
 
@@ -57,6 +55,7 @@ func (c *controller) Run(ctx context.Context) error {
 			worker.Run(workersCtx)
 		}()
 	}
+	errChan := make(chan error, 1)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
 	c.Info("Wait to become leader")
@@ -72,7 +71,7 @@ func (c *controller) Run(ctx context.Context) error {
 		c.workerWaitGroup.Wait()
 		c.Info("stopped workers...")
 		c.Info("stopped controller...")
-		close(c.errChan)
+		close(errChan)
 	}()
 
 	select {
@@ -89,7 +88,7 @@ func (c *controller) Run(ctx context.Context) error {
 				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue)))
 				if err != nil {
 					c.Error("Failed subscribing to stream", "error", err)
-					c.errChan <- err
+					errChan <- err
 				}
 			}()
 		}
@@ -97,7 +96,7 @@ func (c *controller) Run(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			c.Info("Context terminated after being a leader")
-		case err := <-c.errChan:
+		case err := <-errChan:
 			return err
 		}
 	}
