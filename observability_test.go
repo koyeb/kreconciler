@@ -1,33 +1,29 @@
 package kreconciler
 
 import (
-	"bytes"
-	"context"
 	"fmt"
-	"github.com/stretchr/testify/require"
-	"go.opentelemetry.io/otel/exporters/stdout"
-	"go.opentelemetry.io/otel/oteltest"
-	"go.opentelemetry.io/otel/sdk/metric/controller/basic"
-	otelcontroller "go.opentelemetry.io/otel/sdk/metric/controller/basic"
 	"testing"
-	"time"
+
+	"go.opentelemetry.io/otel/sdk/metric/metrictest"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type obsTest struct {
-	log   Logger
-	sr    *oteltest.StandardSpanRecorder
-	contr *otelcontroller.Controller
+	log Logger
+	sr  *tracetest.SpanRecorder
 }
 
-func (o obsTest) SpanRecorder() *oteltest.StandardSpanRecorder {
+func (o obsTest) SpanRecorder() *tracetest.SpanRecorder {
 	return o.sr
 }
 
 func (o obsTest) Observability() Observability {
+	meterProvider, _ := metrictest.NewTestMeterProvider()
 	return Observability{
 		Logger: o.log,
-		Meter:  o.contr.MeterProvider().Meter("test"),
-		Tracer: oteltest.NewTracerProvider(oteltest.WithSpanRecorder(o.sr)).Tracer("test"),
+		Meter:  meterProvider.Meter("test"),
+		Tracer: trace.NewTracerProvider(trace.WithSpanProcessor(o.sr)).Tracer("test"),
 	}
 }
 
@@ -65,21 +61,9 @@ func (l testLog) Warn(msg string, kv ...interface{}) {
 }
 
 func obsForTest(t *testing.T) obsTest {
-	sr := new(oteltest.StandardSpanRecorder)
-	buf1 := bytes.Buffer{}
-	contr, err := stdout.InstallNewPipeline([]stdout.Option{
-		stdout.WithPrettyPrint(),
-		stdout.WithWriter(&buf1),
-	}, []basic.Option{
-		basic.WithCollectPeriod(time.Second * 5),
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		contr.Stop(context.Background())
-	})
+	sr := new(tracetest.SpanRecorder)
 	return obsTest{
-		log:   testLog{t: t},
-		sr:    sr,
-		contr: contr,
+		log: testLog{t: t},
+		sr:  sr,
 	}
 }

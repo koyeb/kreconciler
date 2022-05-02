@@ -47,7 +47,12 @@ func (c *controller) Run(ctx context.Context) error {
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
 	for i := 0; i < c.cfg.WorkerCount; i++ {
-		worker := newWorker(c.Observability, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
+		worker, err := newWorker(c.Observability, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
+		if err != nil {
+			cancelWorkers()
+			return err
+		}
+
 		c.workers = append(c.workers, worker)
 		go func() {
 			c.workerWaitGroup.Add(1)
@@ -55,6 +60,7 @@ func (c *controller) Run(ctx context.Context) error {
 			worker.Run(workersCtx)
 		}()
 	}
+
 	errChan := make(chan error, 1)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
@@ -85,7 +91,15 @@ func (c *controller) Run(ctx context.Context) error {
 			go func() {
 				c.streamWaitGroup.Add(1)
 				defer c.streamWaitGroup.Done()
-				err := stream.Subscribe(streamCtx, MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue)))
+
+				eventHandler, err := MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue))
+				if err != nil {
+					c.Error("Failed creating MeteredEventHandlersubscribing to stream", "error", err, "stream", n)
+					errChan <- err
+					return
+				}
+
+				err = stream.Subscribe(streamCtx, eventHandler)
 				if err != nil {
 					c.Error("Failed subscribing to stream", "error", err, "stream", n)
 					errChan <- err

@@ -2,11 +2,13 @@ package kreconciler
 
 import (
 	"context"
-	"go.opentelemetry.io/otel/label"
-	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/unit"
 	"hash/fnv"
 	"time"
+
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/instrument"
+	"go.opentelemetry.io/otel/metric/unit"
 )
 
 // Config use to configure a controller.
@@ -125,21 +127,27 @@ func (f EventHandlerFunc) Call(ctx context.Context, jobId string) error {
 }
 
 // MeteredEventHandler adds metrics any event reconciler
-func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) EventHandler {
-	counter := metric.Must(meter).NewInt64Counter("kreconciler_stream_event_count")
-	errors := counter.Bind(label.Bool("error", true), label.String("stream", name))
-	ok := counter.Bind(label.Bool("error", false), label.String("stream", name))
+func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) (EventHandler, error) {
+	counter, err := meter.SyncInt64().Counter("kreconciler_stream_event_count")
+	if err != nil {
+		return nil, err
+	}
+
 	return EventHandlerFunc(func(ctx context.Context, jobId string) (err error) {
 		defer func() {
+			attributes := []attribute.KeyValue{attribute.String("stream", name)}
+
 			if err != nil {
-				errors.Add(ctx, 1)
+				attributes = append(attributes, attribute.Bool("error", true))
 			} else {
-				ok.Add(ctx, 1)
+				attributes = append(attributes, attribute.Bool("error", false))
 			}
+
+			counter.Add(ctx, 1, attributes...)
 		}()
 		err = child.Call(ctx, jobId)
 		return
-	})
+	}), nil
 }
 
 // EventStream calls `reconciler` whenever a new event is triggered.
@@ -166,18 +174,23 @@ var NoopStream = EventStreamFunc(func(ctx context.Context, handler EventHandler)
 // ResyncLoopEventStream an EventStream that calls `listFn` every `duration` interval.
 // This is used for rerunning the control-loop for all entities periodically.
 // Having one of these is recommended for any controller.
-func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn func(ctx context.Context) ([]string, error)) EventStream {
-	m := metric.Must(obs.Meter)
-	count := m.NewInt64Counter("kreconciler_stream_resync_item_count",
-		metric.WithUnit(unit.Dimensionless),
-		metric.WithDescription("Increased by the number of items returned by the listFn"),
+func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn func(ctx context.Context) ([]string, error)) (EventStream, error) {
+	count, err := obs.Meter.SyncInt64().Counter("kreconciler_stream_resync_item_count",
+		instrument.WithUnit(unit.Dimensionless),
+		instrument.WithDescription("Increased by the number of items returned by the listFn"),
 	)
-	recorder := m.NewInt64ValueRecorder("kreconciler_stream_resync_millis",
-		metric.WithUnit(unit.Milliseconds),
-		metric.WithDescription("time spent calling the listFn"),
+	if err != nil {
+		return nil, err
+	}
+
+	recorder, err := obs.Meter.SyncInt64().Histogram("kreconciler_stream_resync_millis",
+		instrument.WithUnit(unit.Milliseconds),
+		instrument.WithDescription("time spent calling the listFn"),
 	)
-	errorRecorder := recorder.Bind(label.String("status", "error"))
-	successRecorder := recorder.Bind(label.String("status", "success"))
+	if err != nil {
+		return nil, err
+	}
+
 	return EventStreamFunc(func(ctx context.Context, handler EventHandler) error {
 		ticker := time.NewTicker(duration)
 		for {
@@ -186,14 +199,14 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			// Queue the objects to be handled.
 			elts, err := listFn(ctx)
 			if err != nil {
-				errorRecorder.Record(ctx, time.Since(start).Milliseconds())
+				recorder.Record(ctx, time.Since(start).Milliseconds(), attribute.String("status", "error"))
 				obs.Error("Failed resync loop call", "error", err)
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
 			obs.Info("Adding events", "count", len(elts))
 			count.Add(ctx, int64(len(elts)))
-			successRecorder.Record(ctx, time.Since(start).Milliseconds())
+			recorder.Record(ctx, time.Since(start).Milliseconds(), attribute.String("status", "success"))
 			for _, id := range elts {
 				// Listed objects enqueue as present.
 				err = handler.Call(ctx, id)
@@ -209,5 +222,5 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			case <-ticker.C:
 			}
 		}
-	})
+	}), nil
 }
