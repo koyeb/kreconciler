@@ -4,11 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 type countingHandler struct {
@@ -168,9 +169,11 @@ func TestReconcilerWithLock(t *testing.T) {
 
 func TestResyncLoopEventStream(t *testing.T) {
 	obs := obsForTest(t)
-	stream := ResyncLoopEventStream(obs.Observability(), time.Millisecond*50, func(ctx context.Context) ([]string, error) {
+	stream, err := ResyncLoopEventStream(obs.Observability(), time.Millisecond*50, func(ctx context.Context) ([]string, error) {
 		return []string{"a", "b", "c"}, nil
 	})
+	assert.NoError(t, err)
+
 	idChannel := make(chan string, 10)
 	ctx, cancel := context.WithCancel(context.Background())
 

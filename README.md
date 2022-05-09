@@ -15,7 +15,7 @@ Unfortunately as its name points out it is specific to Kubernetes.
 This library brings a simple way to build `reconcilers` which is the core of an operator.
 It runs a loop that for each event coming in will trigger the control-loop.
 
-Its core gaols are:
+Its core goals are:
 
 1. Remain simple, caching, resync are not meant to be builtins because they are hard to be generic.
 2. Observability is important so it's instrumented with [opentelemetry](https://opentelemetry.io/).

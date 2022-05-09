@@ -3,12 +3,14 @@ package kreconciler
 import (
 	"context"
 	"errors"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/mock"
-	"go.opentelemetry.io/otel/codes"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
 )
 
 type action struct {
@@ -113,7 +115,9 @@ func TestWorker(t *testing.T) {
 			tt.mock(mockHandler)
 
 			ot := obsForTest(t)
-			worker := newWorker(ot.Observability(), 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+			worker, err := newWorker(ot.Observability(), 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+			assert.NoError(t, err)
+
 			wg := sync.WaitGroup{}
 
 			go func() {
@@ -136,6 +140,16 @@ func TestWorker(t *testing.T) {
 	}
 }
 
+func toMap(attributes []attribute.KeyValue) map[attribute.Key]attribute.Value {
+	ret := map[attribute.Key]attribute.Value{}
+
+	for _, attribute := range attributes {
+		ret[attribute.Key] = attribute.Value
+	}
+
+	return ret
+}
+
 func TestTraceWorker(t *testing.T) {
 	obs := obsForTest(t)
 
@@ -146,7 +160,8 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Apply", mock.Anything, "b").Return(Result{})
 	mockHandler.On("Apply", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
-	worker := newWorker(obs.Observability(), 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	worker, err := newWorker(obs.Observability(), 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	assert.NoError(t, err)
 	wg := sync.WaitGroup{}
 
 	go func() {
@@ -162,41 +177,50 @@ func TestTraceWorker(t *testing.T) {
 	done()
 	wg.Wait()
 
-	sr := obs.SpanRecorder().Completed()
+	sr := obs.SpanRecorder().Ended()
 	assert.Len(t, sr, 8) // 5 handle (2 retries) + 3 reconcile
-	assert.Equal(t, "a", sr[0].Attributes()["id"].AsString())
+
+	attrs := toMap(sr[0].Attributes())
+	assert.Equal(t, "a", attrs["id"].AsString())
 	assert.Equal(t, "handle", sr[0].Name())
-	assert.Equal(t, codes.Error, sr[0].StatusCode())
-	assert.NotNil(t, sr[0].Attributes()["error.type"])
+	assert.Equal(t, codes.Error, sr[0].Status().Code)
+	assert.NotNil(t, attrs["error.type"])
 
-	assert.Equal(t, "b", sr[1].Attributes()["id"].AsString())
+	attrs = toMap(sr[1].Attributes())
+	assert.Equal(t, "b", attrs["id"].AsString())
 	assert.Equal(t, "handle", sr[1].Name())
-	assert.Equal(t, codes.Ok, sr[1].StatusCode())
+	assert.Equal(t, codes.Ok, sr[1].Status().Code)
 
-	assert.Equal(t, "b", sr[2].Attributes()["id"].AsString())
+	attrs = toMap(sr[2].Attributes())
+	assert.Equal(t, "b", attrs["id"].AsString())
 	assert.Equal(t, "reconcile", sr[2].Name())
-	assert.Equal(t, codes.Ok, sr[2].StatusCode())
+	assert.Equal(t, codes.Ok, sr[2].Status().Code)
 
-	assert.Equal(t, "c", sr[3].Attributes()["id"].AsString())
+	attrs = toMap(sr[3].Attributes())
+	assert.Equal(t, "c", attrs["id"].AsString())
 	assert.Equal(t, "handle", sr[3].Name())
-	assert.Equal(t, codes.Ok, sr[3].StatusCode())
+	assert.Equal(t, codes.Ok, sr[3].Status().Code)
 
-	assert.Equal(t, "a", sr[4].Attributes()["id"].AsString())
+	attrs = toMap(sr[4].Attributes())
+	assert.Equal(t, "a", attrs["id"].AsString())
 	assert.Equal(t, "handle", sr[4].Name())
-	assert.Equal(t, codes.Error, sr[4].StatusCode())
+	assert.Equal(t, codes.Error, sr[4].Status().Code)
 
-	assert.Equal(t, "a", sr[5].Attributes()["id"].AsString())
+	attrs = toMap(sr[5].Attributes())
+	assert.Equal(t, "a", attrs["id"].AsString())
 	assert.Equal(t, "reconcile", sr[5].Name())
-	assert.Equal(t, codes.Error, sr[5].StatusCode())
-	assert.Equal(t, "Max try exceeded", sr[5].StatusMessage())
+	assert.Equal(t, codes.Error, sr[5].Status().Code)
+	assert.Equal(t, "Max try exceeded", sr[5].Status().Description)
 
-	assert.Equal(t, "c", sr[6].Attributes()["id"].AsString())
+	attrs = toMap(sr[6].Attributes())
+	assert.Equal(t, "c", attrs["id"].AsString())
 	assert.Equal(t, "handle", sr[6].Name())
-	assert.Equal(t, codes.Ok, sr[6].StatusCode())
+	assert.Equal(t, codes.Ok, sr[6].Status().Code)
 
-	assert.Equal(t, "c", sr[7].Attributes()["id"].AsString())
+	attrs = toMap(sr[7].Attributes())
+	assert.Equal(t, "c", attrs["id"].AsString())
 	assert.Equal(t, "reconcile", sr[7].Name())
-	assert.Equal(t, codes.Error, sr[7].StatusCode())
+	assert.Equal(t, codes.Error, sr[7].Status().Code)
 }
 
 type handlerMock struct {

@@ -3,10 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
-	"github.com/koyeb/kreconciler"
 	"math/rand"
 	"strings"
 	"time"
+
+	"github.com/koyeb/kreconciler"
 )
 
 func main() {
@@ -22,13 +23,19 @@ func main() {
 	// This is just a set of fixed items to show case what can be done
 	allItems := []string{"a", "b", "c", "d"}
 
-	err := kreconciler.New(cfg, kreconciler.ReconcilerFunc(func(ctx context.Context, id string) kreconciler.Result {
+	resync, err := kreconciler.ResyncLoopEventStream(cfg.Observability, time.Second*5, func(ctx context.Context) ([]string, error) {
+		return allItems, nil
+	})
+	if err != nil {
+		fmt.Printf("Could not initialize resync loop err='%v'", err)
+		return
+	}
+
+	err = kreconciler.New(cfg, kreconciler.ReconcilerFunc(func(ctx context.Context, id string) kreconciler.Result {
 		cfg.Observability.Info("Got reconcile call", "id", id)
 		return kreconciler.Result{}
 	}), map[string]kreconciler.EventStream{
-		"resync": kreconciler.ResyncLoopEventStream(cfg.Observability, time.Second*5, func(ctx context.Context) ([]string, error) {
-			return allItems, nil
-		}),
+		"resync":   resync,
 		"random5s": tickEventStream(5*time.Second, allItems),
 		"random1s": tickEventStream(time.Second, allItems),
 	}).Run(ctx)

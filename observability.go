@@ -2,8 +2,10 @@ package kreconciler
 
 import (
 	"context"
+
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/metric/nonrecording"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -16,13 +18,13 @@ type Observability struct {
 
 // DefaultObservability uses noopLogger and otel.GetMeter and otel.GetTracer
 func DefaultObservability() Observability {
-	return NewObservability(NoopLogger{}, otel.GetMeterProvider(), otel.GetTracerProvider())
+	return NewObservability(NoopLogger{}, nonrecording.NewNoopMeterProvider(), otel.GetTracerProvider())
 }
 
 // LoggerWithCtx add the tracing context to the logger
 func (o Observability) LoggerWithCtx(ctx context.Context) Logger {
 	spanCtx := trace.SpanContextFromContext(ctx)
-	return o.Logger.With("spanId", spanCtx.SpanID.String(), "traceId", spanCtx.TraceID.String())
+	return o.Logger.With("spanId", spanCtx.SpanID().String(), "traceId", spanCtx.TraceID().String())
 }
 
 // NewObservability create a new observability wraooer (usually easier to use DefaultObservability)
