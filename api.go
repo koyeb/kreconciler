@@ -39,7 +39,7 @@ func DefaultConfig() Config {
 		Observability:         DefaultObservability(),
 		WorkerHasher:          DefaultHasher,
 		WorkerCount:           1,
-		MaxItemRetries:        10,
+		MaxItemRetries:        4,
 		WorkerQueueSize:       2000,
 		LeaderElectionEnabled: true,
 		DelayResolution:       time.Millisecond * 250,
