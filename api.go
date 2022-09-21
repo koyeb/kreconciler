@@ -201,6 +201,12 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			if err != nil {
 				recorder.Record(ctx, time.Since(start).Milliseconds(), attribute.String("status", "error"))
 				obs.Error("Failed resync loop call", "error", err)
+				select {
+				case <-ctx.Done():
+					obs.Info("Finished resync loop")
+					return nil
+				default:
+				}
 				time.Sleep(time.Millisecond * 250)
 				continue
 			}
