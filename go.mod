@@ -1,6 +1,6 @@
 module github.com/koyeb/kreconciler
 
-go 1.18
+go 1.21
 
 require (
 	github.com/stretchr/testify v1.8.4
