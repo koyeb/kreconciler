@@ -10,23 +10,19 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/instrument"
-	"go.opentelemetry.io/otel/metric/instrument/asyncint64"
-	"go.opentelemetry.io/otel/metric/instrument/syncint64"
-	"go.opentelemetry.io/otel/metric/unit"
 	"go.opentelemetry.io/otel/trace"
 )
 
 type metrics struct {
-	queueSizeObserver     asyncint64.UpDownCounter
-	dequeue               syncint64.Counter
-	handleResult          syncint64.Counter
-	delay                 syncint64.Histogram
-	handleLatency         syncint64.Histogram
-	enqueue               syncint64.Counter
-	enqueueFull           syncint64.Counter
-	enqueueAlreadyPresent syncint64.Counter
-	queueTime             syncint64.Histogram
+	queueSizeObserver     metric.Int64ObservableUpDownCounter
+	dequeue               metric.Int64Counter
+	handleResult          metric.Int64Counter
+	delay                 metric.Int64Histogram
+	handleLatency         metric.Int64Histogram
+	enqueue               metric.Int64Counter
+	enqueueFull           metric.Int64Counter
+	enqueueAlreadyPresent metric.Int64Counter
+	queueTime             metric.Int64Histogram
 }
 
 type worker struct {
@@ -69,62 +65,64 @@ func attrWorkerId(id int) attribute.KeyValue {
 }
 
 func decorateMeter(w *worker, meter metric.Meter) error {
-	queueSizeObserver, err := meter.AsyncInt64().UpDownCounter("kreconciler_worker_queue_size",
-		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("The number of outstanding items to reconcile"),
+	queueSizeObserver, err := meter.Int64ObservableUpDownCounter("kreconciler_worker_queue_size",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("The number of outstanding items to reconcile"),
 	)
 	if err != nil {
 		return err
 	}
 	w.metrics.queueSizeObserver = queueSizeObserver
-	meter.RegisterCallback([]instrument.Asynchronous{w.metrics.queueSizeObserver}, func(ctx context.Context) {
-		w.metrics.queueSizeObserver.Observe(ctx, int64(w.objectLocks.Size()), attrWorkerId(w.id))
-	})
+	meter.RegisterCallback(
+		func(_ context.Context, o metric.Observer) error {
+			o.ObserveInt64(queueSizeObserver, int64(w.objectLocks.Size()), metric.WithAttributes(attrWorkerId(w.id)))
+			return nil
+		})
 
-	enqueue, err := meter.SyncInt64().Counter("kreconciler_enqueue",
-		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("The number of times an item was added to the reconcile queue"),
+	enqueue, err := meter.Int64Counter("kreconciler_enqueue",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("The number of times an item was added to the reconcile queue"),
 	)
 	if err != nil {
 		return err
 	}
 	w.metrics.enqueue = enqueue
 
-	w.metrics.dequeue, err = meter.SyncInt64().Counter("kreconciler_dequeue",
-		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("The number of times an item was removed from the reconcile queue (to be handled)"),
+	w.metrics.dequeue, err = meter.Int64Counter("kreconciler_dequeue",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("The number of times an item was removed from the reconcile queue (to be handled)"),
 	)
 	if err != nil {
 		return err
 	}
 
-	w.metrics.handleResult, err = meter.SyncInt64().Counter("kreconciler_handle_result",
-		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("The outcome of the call to handle"),
+	w.metrics.handleResult, err = meter.Int64Counter("kreconciler_handle_result",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("The outcome of the call to handle"),
 	)
 	if err != nil {
 		return err
 	}
 
-	w.metrics.delay, err = meter.SyncInt64().Histogram("kreconciler_requeue_delay_millis",
-		instrument.WithUnit(unit.Milliseconds),
-		instrument.WithDescription("How long we are reenqueing item for"),
+	w.metrics.delay, err = meter.Int64Histogram("kreconciler_requeue_delay_millis",
+		metric.WithUnit("ms"),
+		metric.WithDescription("How long we are reenqueing item for"),
 	)
 	if err != nil {
 		return err
 	}
 
-	w.metrics.handleLatency, err = meter.SyncInt64().Histogram("kreconciler_handle_millis",
-		instrument.WithUnit(unit.Milliseconds),
-		instrument.WithDescription("How long we're taking to process an item"),
+	w.metrics.handleLatency, err = meter.Int64Histogram("kreconciler_handle_millis",
+		metric.WithUnit("ms"),
+		metric.WithDescription("How long we're taking to process an item"),
 	)
 	if err != nil {
 		return err
 	}
 
-	w.metrics.queueTime, err = meter.SyncInt64().Histogram("kreconciler_queue_millis",
-		instrument.WithUnit(unit.Milliseconds),
-		instrument.WithDescription("How long we spent in the queue"),
+	w.metrics.queueTime, err = meter.Int64Histogram("kreconciler_queue_millis",
+		metric.WithUnit("ms"),
+		metric.WithDescription("How long we spent in the queue"),
 	)
 	if err != nil {
 		return err
@@ -194,18 +192,18 @@ func (w *worker) enqueue(i item) error {
 	l := w.Observability.LoggerWithCtx(i.ctx)
 	switch w.objectLocks.Take(i.id) {
 	case errAlreadyPresent:
-		w.metrics.enqueue.Add(i.ctx, 1, attrWorkerId(w.id), attribute.String("status", "already_present"))
+		w.metrics.enqueue.Add(i.ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("status", "already_present")))
 		parentSpan.SetStatus(codes.Ok, "already_present")
 		parentSpan.End()
 		l.Debug("Item already present in the queue, ignoring enqueue", "object_id", i.id)
 		return nil
 	case errQueueOverflow:
-		w.metrics.enqueue.Add(i.ctx, 1, attrWorkerId(w.id), attribute.String("status", "queue_full"))
+		w.metrics.enqueue.Add(i.ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("status", "queue_full")))
 		parentSpan.SetStatus(codes.Error, "queue_full")
 		parentSpan.End()
 		return errQueueAtCapacityError
 	default:
-		w.metrics.enqueue.Add(i.ctx, 1, attrWorkerId(w.id), attribute.String("status", "ok"))
+		w.metrics.enqueue.Add(i.ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("status", "ok")))
 		parentSpan.AddEvent("enqueue")
 		w.queue <- i
 		return nil
@@ -233,7 +231,7 @@ func (w *worker) Run(ctx context.Context) {
 			parentSpan := trace.SpanFromContext(itm.ctx)
 			parentSpan.AddEvent("dequeue")
 			l := w.Observability.LoggerWithCtx(ctx)
-			w.metrics.dequeue.Add(ctx, 1, attrWorkerId(w.id))
+			w.metrics.dequeue.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id)))
 			// process the object.
 			res := w.handle(itm)
 			delay := res.RequeueDelayWithDefault(w.delayQueue.resolution)
@@ -243,14 +241,14 @@ func (w *worker) Run(ctx context.Context) {
 					parentSpan.SetStatus(codes.Error, "Max try exceeded")
 					parentSpan.End()
 					l.Error("Max retry exceeded, dropping item", "object_id", itm.id)
-					w.metrics.handleResult.Add(ctx, 1, attrWorkerId(w.id), attribute.String("result", "drop_max_tries"))
+					w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("result", "drop_max_tries")))
 				} else {
 					if res.Error != nil {
-						w.metrics.handleResult.Add(ctx, 1, attrWorkerId(w.id), attribute.String("result", "error_requeue"))
-						w.metrics.delay.Record(ctx, delay.Milliseconds(), attrWorkerId(w.id), attribute.Bool("error", true))
+						w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("result", "error_requeue")))
+						w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(attrWorkerId(w.id), attribute.Bool("error", true)))
 					} else {
-						w.metrics.handleResult.Add(ctx, 1, attrWorkerId(w.id), attribute.String("result", "delay_requeue"))
-						w.metrics.delay.Record(ctx, delay.Milliseconds(), attrWorkerId(w.id), attribute.Bool("error", false))
+						w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("result", "delay_requeue")))
+						w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(attrWorkerId(w.id), attribute.Bool("error", false)))
 					}
 					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(attribute.Int64("schedule.millis", delay.Milliseconds()), attribute.Int("try_count", itm.tryCount), attribute.Int("max_try", itm.maxTries)))
 					l.Debug("Delay item retry", "object_id", itm.id)
@@ -263,7 +261,7 @@ func (w *worker) Run(ctx context.Context) {
 					}
 				}
 			} else {
-				w.metrics.handleResult.Add(ctx, 1, attrWorkerId(w.id), attribute.String("result", "ok"))
+				w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("result", "ok")))
 				l.Debug("Done", "object_id", itm.id)
 				parentSpan.SetStatus(codes.Ok, "")
 				parentSpan.End()
@@ -282,17 +280,17 @@ func (w *worker) handle(i item) Result {
 	l := w.Observability.LoggerWithCtx(i.ctx)
 	l.Debug("Get event for item", "object_id", i.id)
 	start := time.Now()
-	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds(), attrWorkerId(w.id))
+	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id)))
 	res := w.handler.Apply(handleCtx, i.id)
 	// Retry if required based on the result.
 	if res.Error != nil {
 		span.RecordError(res.Error)
 		span.SetStatus(codes.Error, "")
 		l.Warn("Failed reconcile loop", "object_id", i.id, "error", res.Error)
-		w.metrics.handleLatency.Record(i.ctx, time.Since(start).Milliseconds(), attrWorkerId(w.id), attribute.Bool("error", true))
+		w.metrics.handleLatency.Record(i.ctx, time.Since(start).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id), attribute.Bool("error", true)))
 	} else {
 		span.SetStatus(codes.Ok, "")
-		w.metrics.handleLatency.Record(i.ctx, time.Since(start).Milliseconds(), attrWorkerId(w.id), attribute.Bool("error", false))
+		w.metrics.handleLatency.Record(i.ctx, time.Since(start).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id), attribute.Bool("error", false)))
 	}
 	return res
 }

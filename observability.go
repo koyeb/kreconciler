@@ -5,7 +5,6 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/nonrecording"
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -18,7 +17,7 @@ type Observability struct {
 
 // DefaultObservability uses noopLogger and otel.GetMeter and otel.GetTracer
 func DefaultObservability() Observability {
-	return NewObservability(NoopLogger{}, nonrecording.NewNoopMeterProvider(), otel.GetTracerProvider())
+	return NewObservability(NoopLogger{}, otel.GetMeterProvider(), otel.GetTracerProvider())
 }
 
 // LoggerWithCtx add the tracing context to the logger
