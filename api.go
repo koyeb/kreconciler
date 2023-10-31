@@ -7,8 +7,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"go.opentelemetry.io/otel/metric/instrument"
-	"go.opentelemetry.io/otel/metric/unit"
 )
 
 // Config use to configure a controller.
@@ -128,7 +126,7 @@ func (f EventHandlerFunc) Call(ctx context.Context, jobId string) error {
 
 // MeteredEventHandler adds metrics any event reconciler
 func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) (EventHandler, error) {
-	counter, err := meter.SyncInt64().Counter("kreconciler_stream_event_count")
+	counter, err := meter.Int64Counter("kreconciler_stream_event_count")
 	if err != nil {
 		return nil, err
 	}
@@ -143,7 +141,7 @@ func MeteredEventHandler(meter metric.Meter, name string, child EventHandler) (E
 				attributes = append(attributes, attribute.Bool("error", false))
 			}
 
-			counter.Add(ctx, 1, attributes...)
+			counter.Add(ctx, 1, metric.WithAttributes(attributes...))
 		}()
 		err = child.Call(ctx, jobId)
 		return
@@ -175,17 +173,17 @@ var NoopStream = EventStreamFunc(func(ctx context.Context, handler EventHandler)
 // This is used for rerunning the control-loop for all entities periodically.
 // Having one of these is recommended for any controller.
 func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn func(ctx context.Context) ([]string, error)) (EventStream, error) {
-	count, err := obs.Meter.SyncInt64().Counter("kreconciler_stream_resync_item_count",
-		instrument.WithUnit(unit.Dimensionless),
-		instrument.WithDescription("Increased by the number of items returned by the listFn"),
+	count, err := obs.Meter.Int64Counter("kreconciler_stream_resync_item_count",
+		metric.WithUnit("{count}"),
+		metric.WithDescription("Increased by the number of items returned by the listFn"),
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	recorder, err := obs.Meter.SyncInt64().Histogram("kreconciler_stream_resync_millis",
-		instrument.WithUnit(unit.Milliseconds),
-		instrument.WithDescription("time spent calling the listFn"),
+	recorder, err := obs.Meter.Int64Histogram("kreconciler_stream_resync_millis",
+		metric.WithUnit("ms"),
+		metric.WithDescription("time spent calling the listFn"),
 	)
 	if err != nil {
 		return nil, err
@@ -199,7 +197,7 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			// Queue the objects to be handled.
 			elts, err := listFn(ctx)
 			if err != nil {
-				recorder.Record(ctx, time.Since(start).Milliseconds(), attribute.String("status", "error"))
+				recorder.Record(ctx, time.Since(start).Milliseconds(), metric.WithAttributes(attribute.String("status", "error")))
 				obs.Error("Failed resync loop call", "error", err)
 				select {
 				case <-ctx.Done():
@@ -212,7 +210,7 @@ func ResyncLoopEventStream(obs Observability, duration time.Duration, listFn fun
 			}
 			obs.Info("Adding events", "count", len(elts))
 			count.Add(ctx, int64(len(elts)))
-			recorder.Record(ctx, time.Since(start).Milliseconds(), attribute.String("status", "success"))
+			recorder.Record(ctx, time.Since(start).Milliseconds(), metric.WithAttributes(attribute.String("status", "success")))
 			for _, id := range elts {
 				// Listed objects enqueue as present.
 				err = handler.Call(ctx, id)

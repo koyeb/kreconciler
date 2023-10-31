@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"go.opentelemetry.io/otel/sdk/metric/metrictest"
+	"go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
@@ -19,7 +19,8 @@ func (o obsTest) SpanRecorder() *tracetest.SpanRecorder {
 }
 
 func (o obsTest) Observability() Observability {
-	meterProvider, _ := metrictest.NewTestMeterProvider()
+	reader := metric.NewManualReader()
+	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
 	return Observability{
 		Logger: o.log,
 		Meter:  meterProvider.Meter("test"),
