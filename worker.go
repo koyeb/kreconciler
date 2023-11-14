@@ -41,6 +41,12 @@ type worker struct {
 
 func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, delayResolution time.Duration, maxReconcileTime time.Duration, handler Reconciler) (*worker, error) {
 	obs.Logger = obs.Logger.With("worker-id", id)
+
+	handler, err := newPanicReconciler(obs, newReconcilerWithTimeout(handler, maxReconcileTime))
+	if err != nil {
+		return nil, err
+	}
+
 	w := &worker{
 		id:            id,
 		Observability: obs,
@@ -50,9 +56,10 @@ func newWorker(obs Observability, id, capacity, maxTries, delayQueueSize int, de
 		metrics:       &metrics{},
 		delayQueue:    newQueue(delayQueueSize, delayResolution),
 		objectLocks:   newObjectLocks(capacity),
-		handler:       newPanicReconciler(obs, newReconcilerWithTimeout(handler, maxReconcileTime)),
+		handler:       handler,
 	}
-	err := decorateMeter(w, obs.Meter)
+
+	err = decorateMeter(w, obs.Meter)
 	if err != nil {
 		return nil, err
 	}
@@ -131,12 +138,20 @@ func decorateMeter(w *worker, meter metric.Meter) error {
 	return nil
 }
 
-func newPanicReconciler(obs Observability, delegate Reconciler) Reconciler {
+func newPanicReconciler(obs Observability, delegate Reconciler) (Reconciler, error) {
+	panicCounter, err := obs.Meter.Int64Counter("kreconciler_handler_panic",
+		metric.WithDescription("The number of times the reconciler's handler function panicked"),
+	)
+	if err != nil {
+		return nil, err
+	}
+
 	return ReconcilerFunc(func(ctx context.Context, id string) (r Result) {
 		defer func() {
 			if err := recover(); err != nil {
 				l := obs.LoggerWithCtx(ctx)
 				l.Error("Panicked inside an reconciler", "error", err, "stack", string(debug.Stack()))
+				panicCounter.Add(ctx, 1)
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
 				if e, ok := err.(error); ok {
@@ -148,7 +163,7 @@ func newPanicReconciler(obs Observability, delegate Reconciler) Reconciler {
 		}()
 		r = delegate.Apply(ctx, id)
 		return
-	})
+	}), nil
 }
 
 func newReconcilerWithTimeout(delegate Reconciler, timeout time.Duration) Reconciler {
