@@ -10,17 +10,22 @@ import (
 )
 
 type obsTest struct {
-	log Logger
-	sr  *tracetest.SpanRecorder
+	log    Logger
+	sr     *tracetest.SpanRecorder
+	reader *metric.ManualReader
 }
 
-func (o obsTest) SpanRecorder() *tracetest.SpanRecorder {
+func (o *obsTest) SpanRecorder() *tracetest.SpanRecorder {
 	return o.sr
 }
 
-func (o obsTest) Observability() Observability {
-	reader := metric.NewManualReader()
-	meterProvider := metric.NewMeterProvider(metric.WithReader(reader))
+func (o *obsTest) MetricReader() *metric.ManualReader {
+	return o.reader
+}
+
+func (o *obsTest) Observability() Observability {
+	o.reader = metric.NewManualReader()
+	meterProvider := metric.NewMeterProvider(metric.WithReader(o.reader))
 	return Observability{
 		Logger: o.log,
 		Meter:  meterProvider.Meter("test"),
@@ -49,16 +54,23 @@ func (l testLog) With(kv ...interface{}) Logger {
 }
 
 func (l testLog) Info(msg string, kv ...interface{}) {
-	l.t.Log("INFO", msg)
+	l.t.Helper()
+	l.t.Log("INFO", msg, kv)
 }
+
 func (l testLog) Debug(msg string, kv ...interface{}) {
-	l.t.Log("DEBUG", msg)
+	l.t.Helper()
+	l.t.Log("DEBUG", msg, kv)
 }
+
 func (l testLog) Error(msg string, kv ...interface{}) {
-	l.t.Log("ERROR", msg)
+	l.t.Helper()
+	l.t.Log("ERROR", msg, kv)
 }
+
 func (l testLog) Warn(msg string, kv ...interface{}) {
-	l.t.Log("WARN", msg)
+	l.t.Helper()
+	l.t.Log("WARN", msg, kv)
 }
 
 func obsForTest(t *testing.T) obsTest {

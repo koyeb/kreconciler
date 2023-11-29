@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/mock"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 )
 
 type action struct {
@@ -160,7 +161,8 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Apply", mock.Anything, "b").Return(Result{})
 	mockHandler.On("Apply", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
-	worker, err := newWorker(obs.Observability(), 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	ob := obs.Observability()
+	worker, err := newWorker(ob, 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
 	assert.NoError(t, err)
 	wg := sync.WaitGroup{}
 
@@ -221,6 +223,33 @@ func TestTraceWorker(t *testing.T) {
 	assert.Equal(t, "c", attrs["id"].AsString())
 	assert.Equal(t, "reconcile", sr[7].Name())
 	assert.Equal(t, codes.Error, sr[7].Status().Code)
+}
+
+func TestMetricWorker(t *testing.T) {
+	obs := obsForTest(t)
+
+	mockHandler := new(handlerMock)
+
+	ob := obs.Observability()
+	_, err := newWorker(ob, 0, 0, 0, 0, time.Millisecond*100, 0, mockHandler)
+	assert.NoError(t, err)
+
+	reader := obs.MetricReader()
+	var data metricdata.ResourceMetrics
+	err = reader.Collect(context.Background(), &data)
+	assert.NoError(t, err)
+	assert.NotEmpty(t, data.ScopeMetrics)
+
+	callbackMetric := "kreconciler_worker_queue_size"
+	found := false
+	for _, scopeMetric := range data.ScopeMetrics {
+		for _, metric := range scopeMetric.Metrics {
+			if metric.Name == callbackMetric {
+				found = true
+			}
+		}
+	}
+	assert.True(t, found, "metric %s not found", callbackMetric)
 }
 
 type handlerMock struct {
