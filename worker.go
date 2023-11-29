@@ -14,7 +14,7 @@ import (
 )
 
 type metrics struct {
-	queueSizeObserver     metric.Int64ObservableUpDownCounter
+	queueSizeObserver     metric.Int64ObservableGauge
 	dequeue               metric.Int64Counter
 	handleResult          metric.Int64Counter
 	delay                 metric.Int64Histogram
@@ -72,7 +72,7 @@ func attrWorkerId(id int) attribute.KeyValue {
 }
 
 func decorateMeter(w *worker, meter metric.Meter) error {
-	queueSizeObserver, err := meter.Int64ObservableUpDownCounter("kreconciler_worker_queue_size",
+	queueSizeObserver, err := meter.Int64ObservableGauge("kreconciler_worker_queue_size",
 		metric.WithUnit("{call}"),
 		metric.WithDescription("The number of outstanding items to reconcile"),
 	)
@@ -80,11 +80,14 @@ func decorateMeter(w *worker, meter metric.Meter) error {
 		return err
 	}
 	w.metrics.queueSizeObserver = queueSizeObserver
-	meter.RegisterCallback(
+	_, err = meter.RegisterCallback(
 		func(_ context.Context, o metric.Observer) error {
 			o.ObserveInt64(queueSizeObserver, int64(w.objectLocks.Size()), metric.WithAttributes(attrWorkerId(w.id)))
 			return nil
-		})
+		}, queueSizeObserver)
+	if err != nil {
+		return err
+	}
 
 	enqueue, err := meter.Int64Counter("kreconciler_enqueue",
 		metric.WithUnit("{call}"),
