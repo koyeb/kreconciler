@@ -258,7 +258,7 @@ func (w *worker) Run(ctx context.Context) {
 				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
 					parentSpan.SetStatus(codes.Error, "Max try exceeded")
 					parentSpan.End()
-					l.Error("Max retry exceeded, dropping item", "object_id", itm.id)
+					l.Warn("Max retry exceeded, dropping item", "object_id", itm.id)
 					w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(attrWorkerId(w.id), attribute.String("result", "drop_max_tries")))
 				} else {
 					if res.Error != nil {
