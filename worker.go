@@ -295,11 +295,12 @@ func (w *worker) handle(i item) Result {
 		),
 	)
 	defer span.End()
+	ctx := context.WithValue(handleCtx, "worker_id", w.id)
 	l := w.Observability.LoggerWithCtx(i.ctx)
 	l.Debug("Get event for item", "object_id", i.id)
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id)))
-	res := w.handler.Apply(handleCtx, i.id)
+	res := w.handler.Apply(ctx, i.id)
 	// Retry if required based on the result.
 	if res.Error != nil {
 		span.RecordError(res.Error)
