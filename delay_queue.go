@@ -135,3 +135,15 @@ func (q *dq) nextTime() time.Time {
 	}
 	return q.head.next.end
 }
+
+func (d *dq) dump() []any {
+	d.Lock()
+	defer d.Unlock()
+	var res []any
+	cur := d.head.next
+	for cur != d.tail {
+		res = append(res, cur.i)
+		cur = cur.next
+	}
+	return res
+}
