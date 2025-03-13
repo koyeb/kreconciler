@@ -142,3 +142,23 @@ func TestDelay(t *testing.T) {
 		cancel()
 	})
 }
+
+func Test_dump(t *testing.T) {
+	q := newQueue(3, 10*time.Millisecond)
+	type testItem struct {
+		id string
+	}
+	testItems := []testItem{
+		{id: "1"},
+		{id: "2"},
+		{id: "3"},
+		{id: "4"},
+	}
+	require.NoError(t, q.schedule(testItems[0], time.Millisecond*20))
+	require.NoError(t, q.schedule(testItems[1], time.Millisecond*20))
+	require.NoError(t, q.schedule(testItems[2], time.Millisecond*20))
+	require.Error(t, q.schedule(testItems[3], time.Millisecond*20))
+
+	dump := q.dump()
+	require.ElementsMatch(t, testItems[:3], dump)
+}

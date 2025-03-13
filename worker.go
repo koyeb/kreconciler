@@ -313,3 +313,16 @@ func (w *worker) handle(i item) Result {
 	}
 	return res
 }
+
+func (w *worker) dumpDelayQueue() {
+	items := w.delayQueue.dump()
+	ids := []string{}
+	for _, itm := range items {
+		it, ok := itm.(item)
+		if !ok {
+			continue
+		}
+		ids = append(ids, it.id)
+	}
+	w.Info("dumping delay queue", "items", ids)
+}

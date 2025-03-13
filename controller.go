@@ -2,7 +2,10 @@ package kreconciler
 
 import (
 	"context"
+	"os"
+	"os/signal"
 	"sync"
+	"syscall"
 )
 
 // Controller the core interface to define a control-loop
@@ -61,6 +64,20 @@ func (c *controller) Run(ctx context.Context) error {
 		}()
 	}
 
+	// Handle SIGHUP
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-sig:
+				c.dumpWorkersDelayQueue()
+			}
+		}
+	}()
+
 	errChan := make(chan error, 1)
 	streamCtx, cancelStream := context.WithCancel(ctx)
 	// Run streams subscribers
@@ -73,6 +90,7 @@ func (c *controller) Run(ctx context.Context) error {
 		c.streamWaitGroup.Wait()
 		c.Info("stopped streams...")
 		c.Info("stopping workers...")
+		c.dumpWorkersDelayQueue()
 		cancelWorkers()
 		c.workerWaitGroup.Wait()
 		c.Info("stopped workers...")
@@ -132,4 +150,10 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 		return nil
 	}
 	return c.workers[workerId].Enqueue(id)
+}
+
+func (c *controller) dumpWorkersDelayQueue() {
+	for _, w := range c.workers {
+		w.dumpDelayQueue()
+	}
 }
