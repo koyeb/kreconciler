@@ -45,6 +45,11 @@ type Logger interface {
 	Error(msg string, keyValues ...interface{})
 }
 
+type BufferedLogger interface {
+	Logger
+	Dump()
+}
+
 // NoopLogger a logger that does nothing
 type NoopLogger struct{}
 

@@ -301,6 +301,7 @@ func (w *worker) handle(i item) Result {
 	start := time.Now()
 	w.metrics.queueTime.Record(i.ctx, start.Sub(i.lastEnqueueTime).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id)))
 	res := w.handler.Apply(ctx, i.id)
+
 	// Retry if required based on the result.
 	if res.Error != nil {
 		span.RecordError(res.Error)
@@ -311,6 +312,12 @@ func (w *worker) handle(i item) Result {
 		span.SetStatus(codes.Ok, "")
 		w.metrics.handleLatency.Record(i.ctx, time.Since(start).Milliseconds(), metric.WithAttributes(attrWorkerId(w.id), attribute.Bool("error", false)))
 	}
+
+	bufferedLogger, ok := l.(BufferedLogger)
+	if ok {
+		bufferedLogger.Dump()
+	}
+
 	return res
 }
 
