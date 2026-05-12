@@ -15,11 +15,13 @@ type dq struct {
 	resolution time.Duration
 	size       int
 	capacity   int
+	keys       map[string]struct{}
 }
 
 type qElt struct {
 	next *qElt
 	prev *qElt
+	key  string
 	i    interface{}
 	end  time.Time
 }
@@ -36,6 +38,7 @@ func newQueue(size int, resolution time.Duration) *dq {
 		size:       0,
 		capacity:   size,
 		C:          make(chan bool, 1),
+		keys:       make(map[string]struct{}),
 	}
 	return res
 }
@@ -64,20 +67,25 @@ func (q *dq) run(ctx context.Context, onItem func(t time.Time, i interface{})) {
 	}
 }
 
-func (q *dq) schedule(i interface{}, delay time.Duration) error {
-	return q.scheduleOnTime(i, time.Now().Add(delay))
+func (q *dq) schedule(key string, i interface{}, delay time.Duration) error {
+	return q.scheduleOnTime(key, i, time.Now().Add(delay))
 }
 
-func (q *dq) scheduleOnTime(i interface{}, delay time.Time) error {
+func (q *dq) scheduleOnTime(key string, i interface{}, delay time.Time) error {
 	q.Lock()
 	defer q.Unlock()
+	if _, ok := q.keys[key]; ok {
+		return nil
+	}
 	if q.size == q.capacity {
 		return fmt.Errorf("delay queue is full with %d items", q.capacity)
 	}
 	q.size += 1
+	q.keys[key] = struct{}{}
 	// Only do things in batch of 100 millis this avoids having 1000s of steps
 	end := delay.Truncate(q.resolution)
 	n := &qElt{
+		key: key,
 		i:   i,
 		end: end,
 	}
@@ -111,6 +119,7 @@ func (q *dq) dequeueIfBefore(t time.Time) []interface{} {
 		if n != q.tail && n.end.Before(t) {
 			q.head.next = n.next
 			n.next.prev = q.head
+			delete(q.keys, n.key)
 			res = append(res, n.i)
 			n = n.next
 		} else {

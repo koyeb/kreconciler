@@ -48,7 +48,7 @@ func TestDelay(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
-		require.NoError(t, dq.schedule("1", 0))
+		require.NoError(t, dq.schedule("1", "1", 0))
 
 		time.Sleep(time.Millisecond * 20)
 		cancel()
@@ -59,8 +59,8 @@ func TestDelay(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
-		require.NoError(t, dq.schedule("1", time.Millisecond*50))
-		require.NoError(t, dq.schedule("2", time.Millisecond*20))
+		require.NoError(t, dq.schedule("1", "1", time.Millisecond*50))
+		require.NoError(t, dq.schedule("2", "2", time.Millisecond*20))
 
 		time.Sleep(time.Millisecond * 100)
 		cancel()
@@ -71,8 +71,8 @@ func TestDelay(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
-		require.NoError(t, dq.schedule("1", time.Millisecond*20))
-		require.NoError(t, dq.schedule("2", time.Millisecond*40))
+		require.NoError(t, dq.schedule("1", "1", time.Millisecond*20))
+		require.NoError(t, dq.schedule("2", "2", time.Millisecond*40))
 
 		time.Sleep(time.Millisecond * 100)
 		cancel()
@@ -83,13 +83,13 @@ func TestDelay(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
-		require.NoError(t, dq.schedule("1", time.Millisecond*20))
-		require.NoError(t, dq.schedule("2", time.Millisecond*40))
+		require.NoError(t, dq.schedule("1", "1", time.Millisecond*20))
+		require.NoError(t, dq.schedule("2", "2", time.Millisecond*40))
 		time.Sleep(time.Millisecond * 100)
 		assertRcv(t, r, "1", "2")
 
-		require.NoError(t, dq.schedule("3", time.Millisecond*20))
-		require.NoError(t, dq.schedule("4", time.Millisecond*40))
+		require.NoError(t, dq.schedule("3", "3", time.Millisecond*20))
+		require.NoError(t, dq.schedule("4", "4", time.Millisecond*40))
 		time.Sleep(time.Millisecond * 100)
 		assertRcv(t, r, "1", "2", "3", "4")
 		cancel()
@@ -100,8 +100,8 @@ func TestDelay(t *testing.T) {
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
 		now := time.Now().Truncate(50 * time.Millisecond)
-		require.NoError(t, dq.scheduleOnTime("1", now.Add(time.Millisecond*75)))
-		require.NoError(t, dq.scheduleOnTime("2", now.Add(time.Millisecond*60)))
+		require.NoError(t, dq.scheduleOnTime("1", "1", now.Add(time.Millisecond*75)))
+		require.NoError(t, dq.scheduleOnTime("2", "2", now.Add(time.Millisecond*60)))
 		time.Sleep(time.Millisecond * 200)
 		assertRcv(t, r, "1", "2")
 
@@ -114,8 +114,8 @@ func TestDelay(t *testing.T) {
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
 		now := time.Now().Truncate(50 * time.Millisecond)
-		require.NoError(t, dq.scheduleOnTime("1", now.Add(time.Millisecond*130)))
-		require.NoError(t, dq.scheduleOnTime("2", now.Add(time.Millisecond*80)))
+		require.NoError(t, dq.scheduleOnTime("1", "1", now.Add(time.Millisecond*130)))
+		require.NoError(t, dq.scheduleOnTime("2", "2", now.Add(time.Millisecond*80)))
 		time.Sleep(time.Millisecond * 300)
 		assertRcv(t, r, "2", "1")
 
@@ -123,20 +123,53 @@ func TestDelay(t *testing.T) {
 		assert.NotEqual(t, r.items[0].t.String(), r.items[1].t.String())
 	})
 
+	t.Run("dedup same key", func(t *testing.T) {
+		dq := newQueue(10, 10*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
+		r := &rcv{}
+		go dq.run(ctx, r.OnItem)
+		require.NoError(t, dq.schedule("a", "a-first", time.Millisecond*20))
+		require.NoError(t, dq.schedule("a", "a-second", time.Millisecond*20))
+		require.NoError(t, dq.schedule("a", "a-third", time.Millisecond*20))
+		require.NoError(t, dq.schedule("b", "b", time.Millisecond*20))
+
+		time.Sleep(time.Millisecond * 100)
+		assertRcv(t, r, "a-first", "b")
+
+		// After firing, key "a" is released and can be scheduled again
+		require.NoError(t, dq.schedule("a", "a-again", time.Millisecond*20))
+		time.Sleep(time.Millisecond * 100)
+		assertRcv(t, r, "a-first", "b", "a-again")
+		cancel()
+	})
+	t.Run("dedup does not consume capacity", func(t *testing.T) {
+		dq := newQueue(2, 10*time.Millisecond)
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		r := &rcv{}
+		go dq.run(ctx, r.OnItem)
+		require.NoError(t, dq.schedule("a", "a", time.Millisecond*20))
+		require.NoError(t, dq.schedule("a", "a", time.Millisecond*20))
+		require.NoError(t, dq.schedule("a", "a", time.Millisecond*20))
+		// Capacity is 2, only one slot taken so this must still fit
+		require.NoError(t, dq.schedule("b", "b", time.Millisecond*20))
+		// Now full
+		require.Error(t, dq.schedule("c", "c", time.Millisecond*20))
+	})
 	t.Run("if queue is full errpr", func(t *testing.T) {
 		dq := newQueue(2, 10*time.Millisecond)
 		ctx, cancel := context.WithCancel(context.Background())
 		r := &rcv{}
 		go dq.run(ctx, r.OnItem)
-		require.NoError(t, dq.schedule("1", time.Millisecond*20))
-		require.NoError(t, dq.schedule("2", time.Millisecond*40))
+		require.NoError(t, dq.schedule("1", "1", time.Millisecond*20))
+		require.NoError(t, dq.schedule("2", "2", time.Millisecond*40))
 		// Extra item can't be enqueued
-		require.Error(t, dq.schedule("3", time.Millisecond*40))
+		require.Error(t, dq.schedule("3", "3", time.Millisecond*40))
 		time.Sleep(time.Millisecond * 100)
 		assertRcv(t, r, "1", "2")
 
-		require.NoError(t, dq.schedule("3", time.Millisecond*20))
-		require.NoError(t, dq.schedule("4", time.Millisecond*40))
+		require.NoError(t, dq.schedule("3", "3", time.Millisecond*20))
+		require.NoError(t, dq.schedule("4", "4", time.Millisecond*40))
 		time.Sleep(time.Millisecond * 100)
 		assertRcv(t, r, "1", "2", "3", "4")
 		cancel()
@@ -154,10 +187,10 @@ func Test_dump(t *testing.T) {
 		{id: "3"},
 		{id: "4"},
 	}
-	require.NoError(t, q.schedule(testItems[0], time.Millisecond*20))
-	require.NoError(t, q.schedule(testItems[1], time.Millisecond*20))
-	require.NoError(t, q.schedule(testItems[2], time.Millisecond*20))
-	require.Error(t, q.schedule(testItems[3], time.Millisecond*20))
+	require.NoError(t, q.schedule(testItems[0].id, testItems[0], time.Millisecond*20))
+	require.NoError(t, q.schedule(testItems[1].id, testItems[1], time.Millisecond*20))
+	require.NoError(t, q.schedule(testItems[2].id, testItems[2], time.Millisecond*20))
+	require.Error(t, q.schedule(testItems[3].id, testItems[3], time.Millisecond*20))
 
 	dump := q.dump()
 	require.ElementsMatch(t, testItems[:3], dump)
