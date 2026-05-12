@@ -270,7 +270,7 @@ func (w *worker) Run(ctx context.Context) {
 					}
 					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(attribute.Int64("schedule.millis", delay.Milliseconds()), attribute.Int("try_count", itm.tryCount), attribute.Int("max_try", itm.maxTries)))
 					l.Debug("Delay item retry", "object_id", itm.id)
-					err := w.delayQueue.schedule(itm, delay)
+					err := w.delayQueue.schedule(itm.id, itm, delay)
 					if err != nil {
 						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
 						parentSpan.RecordError(err)
