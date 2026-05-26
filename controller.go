@@ -50,7 +50,11 @@ func (c *controller) Run(ctx context.Context) error {
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
 	for i := 0; i < c.cfg.WorkerCount; i++ {
-		worker, err := newWorker(c.Observability, i, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
+		name := "default"
+		if c.cfg.WorkerNameHelper != nil {
+			name = c.cfg.WorkerNameHelper(i)
+		}
+		worker, err := newWorker(c.Observability, i, name, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
 		if err != nil {
 			cancelWorkers()
 			return err

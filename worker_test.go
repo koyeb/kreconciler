@@ -116,7 +116,7 @@ func TestWorker(t *testing.T) {
 			tt.mock(mockHandler)
 
 			ot := obsForTest(t)
-			worker, err := newWorker(ot.Observability(), 0, tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+			worker, err := newWorker(ot.Observability(), 0, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
 			assert.NoError(t, err)
 
 			wg := sync.WaitGroup{}
@@ -162,7 +162,7 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Apply", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
 	ob := obs.Observability()
-	worker, err := newWorker(ob, 0, 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	worker, err := newWorker(ob, 0, "default", 10, 2, 10, time.Millisecond*100, 0, mockHandler)
 	assert.NoError(t, err)
 	wg := sync.WaitGroup{}
 
@@ -231,7 +231,7 @@ func TestMetricWorker(t *testing.T) {
 	mockHandler := new(handlerMock)
 
 	ob := obs.Observability()
-	_, err := newWorker(ob, 0, 0, 0, 0, time.Millisecond*100, 0, mockHandler)
+	_, err := newWorker(ob, 0, "default", 0, 0, 0, time.Millisecond*100, 0, mockHandler)
 	assert.NoError(t, err)
 
 	reader := obs.MetricReader()
