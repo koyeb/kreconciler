@@ -19,6 +19,8 @@ type Config struct {
 	WorkerHasher WorkerHasher
 	// WorkerCount the number of workers
 	WorkerCount int
+	// WorkerNameHelper returns the name reported as the `workerName` attribute on worker metrics for the given worker id. Multiple workers may share a name.
+	WorkerNameHelper func(id int) string
 	// LeaderElectionEnabled whether or not we should use
 	LeaderElectionEnabled bool
 	// DelayResolution the lowest possible time for a delay retry
@@ -37,6 +39,7 @@ func DefaultConfig() Config {
 		Observability:         DefaultObservability(),
 		WorkerHasher:          DefaultHasher,
 		WorkerCount:           1,
+		WorkerNameHelper:      func(_ int) string { return "default" },
 		MaxItemRetries:        10,
 		WorkerQueueSize:       2000,
 		LeaderElectionEnabled: true,
