@@ -166,7 +166,7 @@ func newPanicReconciler(obs Observability, delegate Reconciler) (Reconciler, err
 		defer func() {
 			if err := recover(); err != nil {
 				l := obs.LoggerWithCtx(ctx)
-				l.Error("Panicked inside an reconciler", "error", err, "stack", string(debug.Stack()))
+				l.Error("Panicked inside an reconciler", "error", err, "id", id, "stack", string(debug.Stack()))
 				panicCounter.Add(ctx, 1)
 				span := trace.SpanFromContext(ctx)
 				span.AddEvent("panic")
