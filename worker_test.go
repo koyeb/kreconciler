@@ -119,19 +119,19 @@ func TestWorker(t *testing.T) {
 			worker, err := newWorker(ot.Observability(), 0, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
 			assert.NoError(t, err)
 
-			wg := sync.WaitGroup{}
-
-			go func() {
-				wg.Add(1)
-				defer wg.Done()
-				worker.Run(ctx)
-			}()
-
+			// Enqueue before the worker starts: a running worker frees an item's slot as it dequeues it.
 			for _, action := range tt.actions {
 				time.Sleep(action.sleepBefore)
 				err := worker.Enqueue(action.id)
 				assert.Equal(t, action.expectedErr, err)
 			}
+
+			wg := sync.WaitGroup{}
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				worker.Run(ctx)
+			}()
 			time.Sleep(time.Millisecond * 600)
 			done()
 			wg.Wait()
