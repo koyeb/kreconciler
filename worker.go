@@ -23,6 +23,8 @@ type metrics struct {
 	enqueueFull           metric.Int64Counter
 	enqueueAlreadyPresent metric.Int64Counter
 	queueTime             metric.Int64Histogram
+	parked                metric.Int64Counter
+	parkedTime            metric.Int64Histogram
 }
 
 type worker struct {
@@ -37,6 +39,9 @@ type worker struct {
 	objectLocks objectLocks
 	capacity    int
 	metrics     *metrics
+	keyLocks    *keyLocks // set by shareQueue, else nil
+	front       chan item // items handed their lock key, served before queue
+	concurrency int
 	Observability
 }
 
@@ -59,6 +64,7 @@ func newWorker(obs Observability, id int, name string, capacity, maxTries, delay
 		delayQueue:    newQueue(delayQueueSize, delayResolution),
 		objectLocks:   newObjectLocks(capacity),
 		handler:       handler,
+		concurrency:   1,
 	}
 
 	err = decorateMeter(w, obs.Meter)
@@ -67,6 +73,26 @@ func newWorker(obs Observability, id int, name string, capacity, maxTries, delay
 	}
 
 	return w, nil
+}
+
+// shareQueue makes w's queue one FIFO for n concurrent loops, where items with the same lock key never run at once.
+func (w *worker) shareQueue(locks *keyLocks, n int) error {
+	w.keyLocks = locks
+	w.concurrency = n
+	w.front = make(chan item, w.capacity+1) // parked items keep their queue slot
+	var err error
+	w.metrics.parked, err = w.Meter.Int64Counter("kreconciler_lock_parked",
+		metric.WithUnit("{call}"),
+		metric.WithDescription("The number of times an item waited because another item held its lock key"),
+	)
+	if err != nil {
+		return err
+	}
+	w.metrics.parkedTime, err = w.Meter.Int64Histogram("kreconciler_lock_parked_millis",
+		metric.WithUnit("ms"),
+		metric.WithDescription("How long an item waited for its lock key"),
+	)
+	return err
 }
 
 func attrWorkerId(id int) attribute.KeyValue {
@@ -201,11 +227,13 @@ type item struct {
 	maxTries         int
 	firstEnqueueTime time.Time
 	lastEnqueueTime  time.Time
+	lockKey          string
+	holdsKey         bool
 }
 
 var errQueueAtCapacityError = errors.New("queue at capacity, retry later")
 
-func (w *worker) Enqueue(id string) error {
+func (w *worker) Enqueue(id, lockKey string) error {
 	ctx, _ := w.Observability.Start(context.Background(), "reconcile",
 		trace.WithSpanKind(trace.SpanKindConsumer),
 		trace.WithNewRoot(),
@@ -214,7 +242,7 @@ func (w *worker) Enqueue(id string) error {
 		),
 	)
 
-	return w.enqueue(item{ctx: ctx, id: id, maxTries: w.maxTries, firstEnqueueTime: time.Now()})
+	return w.enqueue(item{ctx: ctx, id: id, maxTries: w.maxTries, firstEnqueueTime: time.Now(), lockKey: lockKey})
 }
 
 func (w *worker) enqueue(i item) error {
@@ -253,49 +281,81 @@ func (w *worker) Run(ctx context.Context) {
 			l.Error("Failed reenqueing delayed item", "error", err)
 		}
 	})
+	var loops sync.WaitGroup
+	for i := 1; i < w.concurrency; i++ {
+		loops.Add(1)
+		go func() {
+			defer loops.Done()
+			w.loop(ctx)
+		}()
+	}
+	w.loop(ctx)
+	loops.Wait()
+}
+
+func (w *worker) loop(ctx context.Context) {
 	for {
+		var itm item
 		select {
-		case <-ctx.Done():
-			return
-		case itm := <-w.queue:
-			w.objectLocks.Free(itm.id)
-			parentSpan := trace.SpanFromContext(itm.ctx)
-			parentSpan.AddEvent("dequeue")
-			l := w.Observability.LoggerWithCtx(ctx)
-			w.metrics.dequeue.Add(ctx, 1, metric.WithAttributes(w.attrs()...))
-			// process the object.
-			res := w.handle(itm)
-			delay := res.RequeueDelayWithDefault(w.delayQueue.resolution)
-			if delay != 0 {
-				itm.tryCount += 1
-				if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
-					parentSpan.SetStatus(codes.Error, "Max try exceeded")
-					parentSpan.End()
-					l.Warn("Max retry exceeded, dropping item", "object_id", itm.id)
-					w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "drop_max_tries"))...))
-				} else {
-					if res.Error != nil {
-						w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "error_requeue"))...))
-						w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(w.attrs(attribute.Bool("error", true))...))
-					} else {
-						w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "delay_requeue"))...))
-						w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(w.attrs(attribute.Bool("error", false))...))
-					}
-					parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(attribute.Int64("schedule.millis", delay.Milliseconds()), attribute.Int("try_count", itm.tryCount), attribute.Int("max_try", itm.maxTries)))
-					l.Debug("Delay item retry", "object_id", itm.id)
-					err := w.delayQueue.schedule(itm.id, itm, delay)
-					if err != nil {
-						parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
-						parentSpan.RecordError(err)
-						parentSpan.End()
-						l.Error("Error scheduling delay", "error", err)
-					}
-				}
-			} else {
-				w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "ok"))...))
-				l.Debug("Done", "object_id", itm.id)
-				parentSpan.SetStatus(codes.Ok, "")
+		case itm = <-w.front: // nil without a shared queue
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			case itm = <-w.front:
+			case itm = <-w.queue:
+			}
+		}
+		if w.keyLocks != nil && !itm.holdsKey && !w.keyLocks.take(w, itm) {
+			w.metrics.parked.Add(ctx, 1, metric.WithAttributes(w.attrs()...))
+			continue
+		}
+		itm.holdsKey = false
+		w.objectLocks.Free(itm.id)
+		parentSpan := trace.SpanFromContext(itm.ctx)
+		parentSpan.AddEvent("dequeue")
+		l := w.Observability.LoggerWithCtx(ctx)
+		w.metrics.dequeue.Add(ctx, 1, metric.WithAttributes(w.attrs()...))
+		// process the object.
+		res := w.handle(itm)
+		delay := res.RequeueDelayWithDefault(w.delayQueue.resolution)
+		if delay != 0 {
+			itm.tryCount += 1
+			if itm.maxTries != 0 && itm.tryCount == itm.maxTries {
+				parentSpan.SetStatus(codes.Error, "Max try exceeded")
 				parentSpan.End()
+				l.Warn("Max retry exceeded, dropping item", "object_id", itm.id)
+				w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "drop_max_tries"))...))
+			} else {
+				if res.Error != nil {
+					w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "error_requeue"))...))
+					w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(w.attrs(attribute.Bool("error", true))...))
+				} else {
+					w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "delay_requeue"))...))
+					w.metrics.delay.Record(ctx, delay.Milliseconds(), metric.WithAttributes(w.attrs(attribute.Bool("error", false))...))
+				}
+				parentSpan.AddEvent("enqueue_with_delay", trace.WithAttributes(attribute.Int64("schedule.millis", delay.Milliseconds()), attribute.Int("try_count", itm.tryCount), attribute.Int("max_try", itm.maxTries)))
+				l.Debug("Delay item retry", "object_id", itm.id)
+				err := w.delayQueue.schedule(itm.id, itm, delay)
+				if err != nil {
+					parentSpan.SetStatus(codes.Error, "Failed enqueuing with delay")
+					parentSpan.RecordError(err)
+					parentSpan.End()
+					l.Error("Error scheduling delay", "error", err)
+				}
+			}
+		} else {
+			w.metrics.handleResult.Add(ctx, 1, metric.WithAttributes(w.attrs(attribute.String("result", "ok"))...))
+			l.Debug("Done", "object_id", itm.id)
+			parentSpan.SetStatus(codes.Ok, "")
+			parentSpan.End()
+		}
+
+		if w.keyLocks != nil {
+			if p, ok := w.keyLocks.release(itm.lockKey); ok {
+				w.metrics.parkedTime.Record(ctx, time.Since(p.since).Milliseconds(), metric.WithAttributes(p.w.attrs()...))
+				p.holdsKey = true
+				p.w.front <- p.item
 			}
 		}
 	}

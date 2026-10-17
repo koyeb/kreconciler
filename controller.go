@@ -19,7 +19,7 @@ type Controller interface {
 type controller struct {
 	Observability
 	cfg             Config
-	workers         []*worker
+	workers         []*worker // by worker id; with a LockKeyer, the workers sharing a name are one worker
 	reconciler      Reconciler
 	eventStreams    map[string]EventStream
 	streamWaitGroup sync.WaitGroup
@@ -49,18 +49,40 @@ func (c *controller) Run(ctx context.Context) error {
 	}
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
-	for i := 0; i < c.cfg.WorkerCount; i++ {
-		name := "default"
-		if c.cfg.WorkerNameHelper != nil {
-			name = c.cfg.WorkerNameHelper(i)
+	sharing := map[string]int{}
+	if c.cfg.LockKeyer != nil {
+		for i := 0; i < c.cfg.WorkerCount; i++ {
+			sharing[c.workerName(i)]++
 		}
-		worker, err := newWorker(c.Observability, i, name, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
+	}
+	locks := newKeyLocks()
+	shared := map[string]*worker{}
+	for i := 0; i < c.cfg.WorkerCount; i++ {
+		name := c.workerName(i)
+		if w, ok := shared[name]; ok {
+			c.workers = append(c.workers, w)
+			continue
+		}
+		n := max(sharing[name], 1)
+		worker, err := newWorker(c.Observability, i, name, c.cfg.WorkerQueueSize*n, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize*n, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
 		if err != nil {
 			cancelWorkers()
 			return err
 		}
-
+		if c.cfg.LockKeyer != nil {
+			if err := worker.shareQueue(locks, n); err != nil {
+				cancelWorkers()
+				return err
+			}
+			shared[name] = worker
+		}
 		c.workers = append(c.workers, worker)
+	}
+	for i, worker := range c.workers {
+		if worker.id != i {
+			continue // a shared worker runs once
+		}
+		worker := worker
 		go func() {
 			c.workerWaitGroup.Add(1)
 			defer c.workerWaitGroup.Done()
@@ -153,11 +175,30 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 		c.Debug("Dropping item", "id", id)
 		return nil
 	}
-	return c.workers[workerId].Enqueue(id)
+	var lockKey string
+	if c.cfg.LockKeyer != nil {
+		lockKey, err = c.cfg.LockKeyer(ctx, id)
+		if err != nil {
+			return err
+		}
+		if lockKey == "" {
+			lockKey = id
+		}
+	}
+	return c.workers[workerId].Enqueue(id, lockKey)
+}
+
+func (c *controller) workerName(id int) string {
+	if c.cfg.WorkerNameHelper != nil {
+		return c.cfg.WorkerNameHelper(id)
+	}
+	return "default"
 }
 
 func (c *controller) dumpWorkersDelayQueue() {
-	for _, w := range c.workers {
-		w.dumpDelayQueue()
+	for i, w := range c.workers {
+		if w.id == i {
+			w.dumpDelayQueue()
+		}
 	}
 }

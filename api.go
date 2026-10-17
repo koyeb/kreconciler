@@ -31,6 +31,11 @@ type Config struct {
 	MaxReconcileTime time.Duration
 	// Observability configuration for logs, metrics and traces
 	Observability Observability
+	// LockKeyer when set, switches to FIFO dispatch: the workers sharing a WorkerNameHelper name pull from one shared queue
+	// (WorkerHasher picks the queue, which holds WorkerQueueSize and DelayQueueSize items per worker sharing it), and two
+	// items with the same lock key never run at once: an item whose key is busy waits without holding a worker, and runs
+	// before newer items once the key frees. An empty key is the item's id. Unset, each worker has its own queue.
+	LockKeyer func(ctx context.Context, id string) (string, error)
 }
 
 // DefaultConfig a good set of configuration to get started

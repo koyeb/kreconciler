@@ -88,23 +88,28 @@ func TestReconciler(t *testing.T) {
 		t.Run(n, func(t *testing.T) {
 			// Because inside a worker everything should look serial we can always test with many workers
 			for _, count := range []int{1, 2, 4} {
-				t.Run(fmt.Sprintf("With %d workers", count), func(t *testing.T) {
-					obs := obsForTest(t)
-					handler := countingHandler{}
-					ctx, done := context.WithCancel(context.Background())
+				for _, keyed := range []bool{false, true} {
+					t.Run(fmt.Sprintf("With %d workers keyed=%t", count, keyed), func(t *testing.T) {
+						obs := obsForTest(t)
+						handler := countingHandler{}
+						ctx, done := context.WithCancel(context.Background())
 
-					conf := tt.conf
-					if conf.WorkerQueueSize == 0 {
-						conf = DefaultConfig()
-					}
-					conf.LeaderElectionEnabled = false
-					conf.WorkerCount = count
-					conf.Observability = obs.Observability()
-					c := New(conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
-					require.NoError(t, c.Run(ctx))
+						conf := tt.conf
+						if conf.WorkerQueueSize == 0 {
+							conf = DefaultConfig()
+						}
+						conf.LeaderElectionEnabled = false
+						conf.WorkerCount = count
+						conf.Observability = obs.Observability()
+						if keyed {
+							conf.LockKeyer = func(_ context.Context, id string) (string, error) { return id, nil }
+						}
+						c := New(conf, &handler, map[string]EventStream{"default": tt.scenario(done)})
+						require.NoError(t, c.Run(ctx))
 
-					tt.assert(t, c.(*controller), handler.Calls())
-				})
+						tt.assert(t, c.(*controller), handler.Calls())
+					})
+				}
 			}
 		})
 	}

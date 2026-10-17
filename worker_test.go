@@ -3,6 +3,7 @@ package kreconciler
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -109,35 +110,41 @@ func TestWorker(t *testing.T) {
 	}
 
 	for n, tt := range testCases {
-		t.Run(n, func(t *testing.T) {
-			ctx, done := context.WithCancel(context.Background())
+		// The same cases with one queue shared by 2 loops (a LockKeyer): one item per id, so its id is its lock key.
+		for _, shared := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s shared=%t", n, shared), func(t *testing.T) {
+				ctx, done := context.WithCancel(context.Background())
 
-			mockHandler := new(handlerMock)
-			tt.mock(mockHandler)
+				mockHandler := new(handlerMock)
+				tt.mock(mockHandler)
 
-			ot := obsForTest(t)
-			worker, err := newWorker(ot.Observability(), 0, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
-			assert.NoError(t, err)
+				ot := obsForTest(t)
+				worker, err := newWorker(ot.Observability(), 0, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+				assert.NoError(t, err)
+				if shared {
+					assert.NoError(t, worker.shareQueue(newKeyLocks(), 2))
+				}
 
-			// Enqueue before the worker starts: a running worker frees an item's slot as it dequeues it.
-			for _, action := range tt.actions {
-				time.Sleep(action.sleepBefore)
-				err := worker.Enqueue(action.id)
-				assert.Equal(t, action.expectedErr, err)
-			}
+				// Enqueue before the worker starts: a running worker frees an item's slot as it dequeues it.
+				for _, action := range tt.actions {
+					time.Sleep(action.sleepBefore)
+					err := worker.Enqueue(action.id, action.id)
+					assert.Equal(t, action.expectedErr, err)
+				}
 
-			wg := sync.WaitGroup{}
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				worker.Run(ctx)
-			}()
-			time.Sleep(time.Millisecond * 600)
-			done()
-			wg.Wait()
+				wg := sync.WaitGroup{}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					worker.Run(ctx)
+				}()
+				time.Sleep(time.Millisecond * 600)
+				done()
+				wg.Wait()
 
-			tt.assert(t, mockHandler)
-		})
+				tt.assert(t, mockHandler)
+			})
+		}
 	}
 }
 
@@ -171,9 +178,9 @@ func TestTraceWorker(t *testing.T) {
 		defer wg.Done()
 		worker.Run(ctx)
 	}()
-	worker.Enqueue("a")
-	worker.Enqueue("b")
-	worker.Enqueue("c")
+	worker.Enqueue("a", "")
+	worker.Enqueue("b", "")
+	worker.Enqueue("c", "")
 
 	time.Sleep(time.Second)
 	done()
