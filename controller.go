@@ -2,8 +2,10 @@ package kreconciler
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
+	"sort"
 	"sync"
 	"syscall"
 )
@@ -19,7 +21,7 @@ type Controller interface {
 type controller struct {
 	Observability
 	cfg             Config
-	workers         []*worker
+	queues          map[string]*worker
 	reconciler      Reconciler
 	eventStreams    map[string]EventStream
 	streamWaitGroup sync.WaitGroup
@@ -47,20 +49,30 @@ func (c *controller) Run(ctx context.Context) error {
 	if !c.cfg.LeaderElectionEnabled {
 		c.isLeader <- struct{}{}
 	}
+	counts, err := c.workerCounts()
+	if err != nil {
+		return err
+	}
+	names := make([]string, 0, len(counts))
+	for name := range counts {
+		names = append(names, name)
+	}
+	sort.Strings(names)
 	// Run workers.
 	workersCtx, cancelWorkers := context.WithCancel(ctx)
-	for i := 0; i < c.cfg.WorkerCount; i++ {
-		name := "default"
-		if c.cfg.WorkerNameHelper != nil {
-			name = c.cfg.WorkerNameHelper(i)
-		}
-		worker, err := newWorker(c.Observability, i, name, c.cfg.WorkerQueueSize, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler)
+	keyLocks := newKeyLocks()
+	c.queues = make(map[string]*worker, len(counts))
+	firstId := 0
+	for _, name := range names {
+		n := counts[name]
+		worker, err := newWorker(c.Observability, firstId, n, name, c.cfg.WorkerQueueSize*n, c.cfg.MaxItemRetries, c.cfg.DelayQueueSize*n, c.cfg.DelayResolution, c.cfg.MaxReconcileTime, c.reconciler, keyLocks)
 		if err != nil {
 			cancelWorkers()
 			return err
 		}
+		firstId += n
 
-		c.workers = append(c.workers, worker)
+		c.queues[name] = worker
 		c.workerWaitGroup.Add(1)
 		go func() {
 			defer c.workerWaitGroup.Done()
@@ -140,24 +152,52 @@ func (c *controller) Run(ctx context.Context) error {
 	return nil
 }
 
+const defaultQueue = "default"
+
+// workerCounts the number of workers of each queue.
+func (c *controller) workerCounts() (map[string]int, error) {
+	counts := map[string]int{defaultQueue: c.cfg.WorkerCount}
+	for name, n := range c.cfg.Queues {
+		if name == defaultQueue {
+			return nil, fmt.Errorf("queue name %q is reserved", name)
+		}
+		if n <= 0 {
+			return nil, fmt.Errorf("queue %q needs a positive worker count, got %d", name, n)
+		}
+		counts[name] = n
+		counts[defaultQueue] -= n
+	}
+	if counts[defaultQueue] <= 0 {
+		return nil, fmt.Errorf("no worker left for the default queue: WorkerCount %d, %d reserved in Queues", c.cfg.WorkerCount, c.cfg.WorkerCount-counts[defaultQueue])
+	}
+	return counts, nil
+}
+
 func (c *controller) enqueue(ctx context.Context, id string) error {
 	// Simply discard items with empty ids
 	if id == "" {
 		return nil
 	}
-	workerId, err := c.cfg.WorkerHasher.Route(ctx, id, c.cfg.WorkerCount)
+	route, err := c.cfg.Router.Route(ctx, id)
 	if err != nil {
 		return err
 	}
-	if workerId < 0 {
+	if route.Drop {
 		c.Debug("Dropping item", "id", id)
 		return nil
 	}
-	return c.workers[workerId].Enqueue(id)
+	w, ok := c.queues[route.Queue]
+	if !ok {
+		w = c.queues[defaultQueue]
+	}
+	if route.Key == "" {
+		route.Key = id
+	}
+	return w.Enqueue(id, route.Key)
 }
 
 func (c *controller) dumpWorkersDelayQueue() {
-	for _, w := range c.workers {
+	for _, w := range c.queues {
 		w.dumpDelayQueue()
 	}
 }
