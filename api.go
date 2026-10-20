@@ -2,7 +2,6 @@ package kreconciler
 
 import (
 	"context"
-	"hash/fnv"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -13,19 +12,20 @@ import (
 type Config struct {
 	// MaxItemRetries the number of times an item gets retried before dropping it
 	MaxItemRetries int
-	// WorkerQueueSize the size of the worker queue (outstanding reconciles)
+	// WorkerQueueSize the number of outstanding reconciles a queue holds per worker serving it
 	WorkerQueueSize int
-	// WorkerHasher the function to assign work between workers
-	WorkerHasher WorkerHasher
-	// WorkerCount the number of workers
+	// WorkerCount the number of workers, including the ones reserved in Queues
 	WorkerCount int
-	// WorkerNameHelper returns the name reported as the `workerName` attribute on worker metrics for the given worker id. Multiple workers may share a name.
-	WorkerNameHelper func(id int) string
+	// Router picks each item's queue and lock key
+	Router Router
+	// Queues reserves workers for named queues (name: worker count), the default queue gets the rest of WorkerCount.
+	// The queue's name is the `workerName` attribute of its metrics, "default" for the default queue.
+	Queues map[string]int
 	// LeaderElectionEnabled whether or not we should use
 	LeaderElectionEnabled bool
 	// DelayResolution the lowest possible time for a delay retry
 	DelayResolution time.Duration
-	// DelayQueueSize the maximum number of items in the scheduled delay queue
+	// DelayQueueSize the maximum number of items in the scheduled delay queue, per worker serving it
 	DelayQueueSize int
 	// MaxReconcileTime the maximum time a handle of an item should take
 	MaxReconcileTime time.Duration
@@ -37,9 +37,8 @@ type Config struct {
 func DefaultConfig() Config {
 	return Config{
 		Observability:         DefaultObservability(),
-		WorkerHasher:          DefaultHasher,
+		Router:                DefaultRouter,
 		WorkerCount:           1,
-		WorkerNameHelper:      func(_ int) string { return "default" },
 		MaxItemRetries:        10,
 		WorkerQueueSize:       2000,
 		LeaderElectionEnabled: true,
@@ -90,28 +89,33 @@ type Error interface {
 	RetryDelay() time.Duration
 }
 
-// WorkerHasher specifies which of the control-loop workers should handle this specific item.
-type WorkerHasher interface {
-	// Route decide on which worker this item will go (return a value < 0 to drop this item), count is the number of items
-	Route(ctx context.Context, id string, count int) (int, error)
+// Route where an item goes. Items wait in one FIFO per queue, and any free worker of the queue takes the oldest.
+type Route struct {
+	// Queue the queue the item waits in: a name in Config.Queues, else the default queue
+	Queue string
+	// Key two items with the same key never run at once, even in different queues. An item whose key is busy waits
+	// without holding a worker, and runs right after the item holding it, before newer items. Empty is the item's id.
+	Key string
+	// Drop discard the item
+	Drop bool
 }
 
-// WorkerHasherFunc see WorkerHasher
-type WorkerHasherFunc func(ctx context.Context, id string, count int) (int, error)
-
-// Route calls f(ctx, id, count).
-func (f WorkerHasherFunc) Route(ctx context.Context, id string, count int) (int, error) {
-	return f(ctx, id, count)
+// Router decides where an item goes. It is called on each enqueue, but not on retries, which keep their route.
+type Router interface {
+	Route(ctx context.Context, id string) (Route, error)
 }
 
-// DefaultHasher a WorkerHasher which hashes the id and return `hash % count`.
-var DefaultHasher = WorkerHasherFunc(func(_ context.Context, id string, count int) (int, error) {
-	if count == 1 {
-		return 0, nil
-	}
-	algorithm := fnv.New32a()
-	algorithm.Write([]byte(id))
-	return int(algorithm.Sum32() % uint32(count)), nil
+// RouterFunc see Router
+type RouterFunc func(ctx context.Context, id string) (Route, error)
+
+// Route calls f(ctx, id).
+func (f RouterFunc) Route(ctx context.Context, id string) (Route, error) {
+	return f(ctx, id)
+}
+
+// DefaultRouter a Router which sends every item to the default queue, keyed by its id.
+var DefaultRouter = RouterFunc(func(_ context.Context, _ string) (Route, error) {
+	return Route{}, nil
 })
 
 // EventHandler called whenever an event is triggered
