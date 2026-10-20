@@ -116,13 +116,13 @@ func TestWorker(t *testing.T) {
 			tt.mock(mockHandler)
 
 			ot := obsForTest(t)
-			worker, err := newWorker(ot.Observability(), 0, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler)
+			worker, err := newWorker(ot.Observability(), 0, 1, "default", tt.capacity, tt.maxTries, 10, time.Millisecond*100, tt.maxDuration, mockHandler, newKeyLocks())
 			assert.NoError(t, err)
 
 			// Enqueue before the worker starts: a running worker frees an item's slot as it dequeues it.
 			for _, action := range tt.actions {
 				time.Sleep(action.sleepBefore)
-				err := worker.Enqueue(action.id)
+				err := worker.Enqueue(action.id, action.id)
 				assert.Equal(t, action.expectedErr, err)
 			}
 
@@ -162,7 +162,7 @@ func TestTraceWorker(t *testing.T) {
 	mockHandler.On("Apply", mock.Anything, "c").Return(Result{RequeueDelay: 250 * time.Millisecond})
 
 	ob := obs.Observability()
-	worker, err := newWorker(ob, 0, "default", 10, 2, 10, time.Millisecond*100, 0, mockHandler)
+	worker, err := newWorker(ob, 0, 1, "default", 10, 2, 10, time.Millisecond*100, 0, mockHandler, newKeyLocks())
 	assert.NoError(t, err)
 	wg := sync.WaitGroup{}
 
@@ -171,9 +171,9 @@ func TestTraceWorker(t *testing.T) {
 		defer wg.Done()
 		worker.Run(ctx)
 	}()
-	worker.Enqueue("a")
-	worker.Enqueue("b")
-	worker.Enqueue("c")
+	worker.Enqueue("a", "a")
+	worker.Enqueue("b", "b")
+	worker.Enqueue("c", "c")
 
 	time.Sleep(time.Second)
 	done()
@@ -231,7 +231,7 @@ func TestMetricWorker(t *testing.T) {
 	mockHandler := new(handlerMock)
 
 	ob := obs.Observability()
-	_, err := newWorker(ob, 0, "default", 0, 0, 0, time.Millisecond*100, 0, mockHandler)
+	_, err := newWorker(ob, 0, 1, "default", 0, 0, 0, time.Millisecond*100, 0, mockHandler, newKeyLocks())
 	assert.NoError(t, err)
 
 	reader := obs.MetricReader()

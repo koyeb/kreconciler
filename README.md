@@ -24,6 +24,13 @@ Its core goals are:
 The reason why 2 is so important is that testing an operator is incredibly complicated.
 It's therefore necessary to make execution of the reconciler as observable as possible to be able to figure out issues.
 
+## Concurrency
+
+Items wait in a FIFO queue, and any free worker takes the oldest one. `Config.Router` gives each item a key (its id
+by default): two items with the same key never run at once, and an item whose key is busy waits without holding a
+worker. Use a parent id as the key to serialize the items of a parent. `Config.Queues` reserves workers for named
+queues, so that one kind of item never waits behind another.
+
 ## Who uses it
 
 At Koyeb we've built reconcilers that helps keeping our models in sync with [Hashicorp Nomad](https://www.nomadproject.io/) and [Kuma](kuma.io/).
