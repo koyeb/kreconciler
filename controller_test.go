@@ -146,8 +146,8 @@ func TestReconcilerWithLock(t *testing.T) {
 		}),
 	})
 	wg := sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		c.Run(ctx)
 	}()
@@ -221,8 +221,8 @@ func TestReconcilerWithLockNeverLeader(t *testing.T) {
 		}),
 	})
 	wg := sync.WaitGroup{}
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		c.Run(ctx)
 	}()

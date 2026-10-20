@@ -61,8 +61,8 @@ func (c *controller) Run(ctx context.Context) error {
 		}
 
 		c.workers = append(c.workers, worker)
+		c.workerWaitGroup.Add(1)
 		go func() {
-			c.workerWaitGroup.Add(1)
 			defer c.workerWaitGroup.Done()
 			worker.Run(workersCtx)
 		}()
@@ -110,8 +110,8 @@ func (c *controller) Run(ctx context.Context) error {
 		for name, stream := range c.eventStreams {
 			stream := stream
 			n := name
+			c.streamWaitGroup.Add(1)
 			go func() {
-				c.streamWaitGroup.Add(1)
 				defer c.streamWaitGroup.Done()
 
 				eventHandler, err := MeteredEventHandler(c.Observability.Meter, n, EventHandlerFunc(c.enqueue))
