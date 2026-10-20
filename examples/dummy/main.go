@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/koyeb/kreconciler"
+	"github.com/koyeb/kreconciler/v2"
 )
 
 func main() {
