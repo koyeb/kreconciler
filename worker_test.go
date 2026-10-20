@@ -121,8 +121,8 @@ func TestWorker(t *testing.T) {
 
 			wg := sync.WaitGroup{}
 
+			wg.Add(1)
 			go func() {
-				wg.Add(1)
 				defer wg.Done()
 				worker.Run(ctx)
 			}()
@@ -166,8 +166,8 @@ func TestTraceWorker(t *testing.T) {
 	assert.NoError(t, err)
 	wg := sync.WaitGroup{}
 
+	wg.Add(1)
 	go func() {
-		wg.Add(1)
 		defer wg.Done()
 		worker.Run(ctx)
 	}()
