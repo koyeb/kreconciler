@@ -33,6 +33,7 @@ type worker struct {
 	count       int
 	name        string
 	queue       chan item
+	front       chan item // items handed their key on release, served before queue
 	ticker      *time.Ticker
 	delayQueue  *dq
 	maxTries    int
@@ -58,6 +59,7 @@ func newWorker(obs Observability, firstId, count int, name string, capacity, max
 		name:          name,
 		Observability: obs,
 		queue:         make(chan item, capacity+1), // TO handle the inflight item schedule
+		front:         make(chan item, capacity),   // a handed item keeps its objectLocks slot: sending never blocks
 		capacity:      capacity,
 		maxTries:      maxTries,
 		metrics:       &metrics{},
@@ -212,6 +214,7 @@ type item struct {
 	firstEnqueueTime time.Time
 	lastEnqueueTime  time.Time
 	key              string
+	holdsKey         bool // handed its key by the item that held it
 }
 
 var errQueueAtCapacityError = errors.New("queue at capacity, retry later")
@@ -276,26 +279,28 @@ func (w *worker) Run(ctx context.Context) {
 }
 
 func (w *worker) loop(ctx context.Context, workerId int) {
-	for {
+	for ctx.Err() == nil { // a handed item stays in front when stopping
 		var itm item
 		select {
-		case <-ctx.Done():
-			return
-		case itm = <-w.queue:
+		case itm = <-w.front:
+		default:
+			select {
+			case <-ctx.Done():
+				return
+			case itm = <-w.front:
+			case itm = <-w.queue:
+			}
 		}
-		if !w.keyLocks.take(w, itm) {
+		if !itm.holdsKey && !w.keyLocks.take(w, itm) {
 			w.metrics.parked.Add(ctx, 1, metric.WithAttributes(w.attrs()...))
 			continue
 		}
-		// Run it, then the items that waited for its key, oldest first: they may come from other queues.
-		owner := w
-		for {
-			owner.process(ctx, workerId, itm)
-			next, ok := w.keyLocks.release(itm.key)
-			if !ok || ctx.Err() != nil {
-				break
-			}
-			owner, itm = next.w, next.item
+		itm.holdsKey = false
+		w.process(ctx, workerId, itm)
+		// Hand the key to the oldest item waiting for it, which runs on its own queue's workers.
+		if next, ok := w.keyLocks.release(itm.key); ok {
+			next.holdsKey = true
+			next.w.front <- next.item
 		}
 	}
 }

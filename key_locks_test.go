@@ -268,3 +268,173 @@ func TestParkedItem(t *testing.T) {
 	assert.Equal(t, map[string]int{"k/holder": 1, "k/delayed": 2, "k/failing": 3, "other": 1}, calls)
 	assert.Empty(t, w.keyLocks.parked, "a key stays taken")
 }
+
+// parkedOn the items parked on key, and whether key is taken.
+func parkedOn(c *controller, key string) ([]parkedItem, bool) {
+	k := c.queues[defaultQueue].keyLocks
+	k.m.Lock()
+	defer k.m.Unlock()
+	waiting, taken := k.parked[key]
+	return append([]parkedItem(nil), waiting...), taken
+}
+
+// queueOf the name of the queue whose loop runs as the worker in ctx.
+func queueOf(c *controller, ctx context.Context) string {
+	id := ctx.Value("worker_id").(int)
+	for name, w := range c.queues {
+		if id >= w.firstId && id < w.firstId+w.count {
+			return name
+		}
+	}
+	return ""
+}
+
+func TestHandedItemRunsInItsOwnQueue(t *testing.T) {
+	var c *controller
+	var m sync.Mutex
+	ranIn := map[string]string{}
+	unblock := make(chan struct{})
+	reconciler := ReconcilerFunc(func(ctx context.Context, id string) Result {
+		if id == "reserved:k/holder" {
+			<-unblock
+		}
+		m.Lock()
+		ranIn[id] = queueOf(c, ctx)
+		m.Unlock()
+		return Result{}
+	})
+
+	conf := DefaultConfig()
+	conf.WorkerCount = 3
+	conf.Queues = map[string]int{"reserved": 1}
+	conf.Router = parentRouter
+	runController(t, conf, reconciler, func(ctrl *controller, enqueue func(string)) {
+		c = ctrl
+		release := sync.OnceFunc(func() { close(unblock) })
+		defer release()
+		enqueue("reserved:k/holder")
+		eventually(t, time.Second, func() bool { _, taken := parkedOn(ctrl, "k"); return taken })
+		for i := 0; i < 5; i++ {
+			enqueue(fmt.Sprintf("k/%d", i))
+		}
+		eventually(t, time.Second, func() bool { waiting, _ := parkedOn(ctrl, "k"); return len(waiting) == 5 })
+		release()
+		eventually(t, time.Second, func() bool {
+			m.Lock()
+			defer m.Unlock()
+			return len(ranIn) == 6
+		})
+	})
+
+	for id, queue := range ranIn {
+		want, _ := parentRouter(context.Background(), id)
+		if want.Queue == "" {
+			want.Queue = defaultQueue
+		}
+		assert.Equal(t, want.Queue, queue, "%s ran in another queue's worker", id)
+	}
+}
+
+func TestBusyKeyDoesNotPinAWorker(t *testing.T) {
+	var m sync.Mutex
+	workers := map[int]bool{}
+	finished := map[string]bool{}
+	reconciler := ReconcilerFunc(func(ctx context.Context, id string) Result {
+		if strings.HasPrefix(id, "busy/") {
+			time.Sleep(time.Millisecond)
+		}
+		m.Lock()
+		if strings.HasPrefix(id, "busy/") {
+			workers[ctx.Value("worker_id").(int)] = true
+		}
+		finished[id] = true
+		m.Unlock()
+		return Result{}
+	})
+
+	conf := DefaultConfig()
+	conf.WorkerCount = 2
+	conf.Router = parentRouter
+	runController(t, conf, reconciler, func(_ *controller, enqueue func(string)) {
+		for i := 0; i < 50; i++ {
+			enqueue(fmt.Sprintf("busy/%d", i))
+		}
+		for i := 0; i < 5; i++ {
+			enqueue(fmt.Sprintf("other%d/x", i))
+		}
+		eventually(t, time.Second, func() bool {
+			m.Lock()
+			defer m.Unlock()
+			for i := 0; i < 5; i++ {
+				if !finished[fmt.Sprintf("other%d/x", i)] {
+					return false
+				}
+			}
+			return !finished["busy/49"]
+		})
+		eventually(t, 5*time.Second, func() bool {
+			m.Lock()
+			defer m.Unlock()
+			return len(finished) == 55
+		})
+	})
+
+	assert.Len(t, workers, 2, "one worker ran every item of the busy key")
+}
+
+func TestHandOffKeepsOrder(t *testing.T) {
+	var m sync.Mutex
+	var order []string
+	unblock := make(chan struct{})
+	reconciler := ReconcilerFunc(func(_ context.Context, id string) Result {
+		if id == "k/holder" {
+			<-unblock
+		}
+		m.Lock()
+		order = append(order, id)
+		m.Unlock()
+		return Result{}
+	})
+
+	// The same key in both queues: parked items run oldest first, whatever their queue.
+	var want []string
+	for i := 0; i < 10; i++ {
+		if i%2 == 0 {
+			want = append(want, fmt.Sprintf("k/%d", i))
+		} else {
+			want = append(want, fmt.Sprintf("reserved:k/%d", i))
+		}
+	}
+	conf := DefaultConfig()
+	conf.WorkerCount = 4
+	conf.Queues = map[string]int{"reserved": 2}
+	conf.Router = parentRouter
+	runController(t, conf, reconciler, func(c *controller, enqueue func(string)) {
+		release := sync.OnceFunc(func() { close(unblock) })
+		defer release()
+		enqueue("k/holder")
+		eventually(t, time.Second, func() bool { _, taken := parkedOn(c, "k"); return taken })
+		for _, id := range want[:5] {
+			enqueue(id)
+			eventually(t, time.Second, func() bool { // parked in enqueue order
+				waiting, _ := parkedOn(c, "k")
+				return len(waiting) > 0 && waiting[len(waiting)-1].id == id
+			})
+		}
+		release()
+		for _, id := range want[5:] { // newer items arrive while the parked ones run
+			enqueue(id)
+		}
+		eventually(t, time.Second, func() bool {
+			m.Lock()
+			defer m.Unlock()
+			return len(order) == 11
+		})
+	})
+
+	m.Lock()
+	defer m.Unlock()
+	assert.Equal(t, "k/holder", order[0])
+	assert.Equal(t, want[:5], order[1:6], "parked items ran out of order")
+	assert.ElementsMatch(t, want[5:], order[6:])
+}

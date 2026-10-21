@@ -32,7 +32,7 @@ func (k *keyLocks) take(w *worker, i item) bool {
 	return true
 }
 
-// release frees key, or hands it to the oldest item parked on it, which the caller must run.
+// release frees key, or hands it to the oldest item parked on it, which the caller must send to its queue.
 func (k *keyLocks) release(key string) (parkedItem, bool) {
 	k.m.Lock()
 	defer k.m.Unlock()

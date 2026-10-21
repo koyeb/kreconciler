@@ -188,6 +188,9 @@ func (c *controller) enqueue(ctx context.Context, id string) error {
 	}
 	w, ok := c.queues[route.Queue]
 	if !ok {
+		if route.Queue != "" {
+			c.Warn("Unknown queue, using the default one", "queue", route.Queue, "id", id)
+		}
 		w = c.queues[defaultQueue]
 	}
 	if route.Key == "" {

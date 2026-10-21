@@ -94,7 +94,8 @@ type Route struct {
 	// Queue the queue the item waits in: a name in Config.Queues, else the default queue
 	Queue string
 	// Key two items with the same key never run at once, even in different queues. An item whose key is busy waits
-	// without holding a worker, and runs right after the item holding it, before newer items. Empty is the item's id.
+	// without holding a worker, and runs right after the item holding it, on its own queue, before newer items. Empty
+	// is the item's id.
 	Key string
 	// Drop discard the item
 	Drop bool
