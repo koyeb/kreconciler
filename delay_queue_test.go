@@ -195,3 +195,27 @@ func Test_dump(t *testing.T) {
 	dump := q.dump()
 	require.ElementsMatch(t, testItems[:3], dump)
 }
+
+func TestTimerFiringAtEndTime(t *testing.T) {
+	// A timer sends the time it was set to fire at, which can be the head's end time exactly.
+	q := newQueue(10, 10*time.Millisecond)
+	end := time.Now().Add(time.Second).Truncate(q.resolution)
+	require.NoError(t, q.scheduleOnTime("1", "1", end))
+	require.NoError(t, q.scheduleOnTime("2", "2", end.Add(q.resolution)))
+	ticks := func() int {
+		select {
+		case <-q.C:
+			return 1
+		default:
+			return 0
+		}
+	}
+	require.Equal(t, 1, ticks())
+
+	assert.Empty(t, q.dequeueIfBefore(end.Add(-time.Nanosecond)))
+	assert.Equal(t, 1, ticks(), "a fire with nothing due must restart the tick, or the items left never fire")
+
+	assert.Equal(t, []interface{}{"1"}, q.dequeueIfBefore(end))
+	assert.Equal(t, 1, ticks())
+	assert.Equal(t, 1, q.size)
+}
