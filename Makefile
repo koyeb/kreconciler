@@ -14,4 +14,4 @@ test:
 check: tidy fmt vet test
 
 publish: # Forces refresh of go.dev
-	GOPROXY=https://proxy.golang.org go get github.com/koyeb/kreconciler
+	cd "$$(mktemp -d)" && GOPROXY=https://proxy.golang.org go list -m github.com/koyeb/kreconciler/v2@$(VERSION)

@@ -3,9 +3,12 @@ on: [pull_request]
 jobs:
   check:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        go-version: ["1.26.x", "1.27.x"]
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions/setup-go@v2
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          go-version: "1.21"
+          go-version: ${{ matrix.go-version }}
       - run: make check
