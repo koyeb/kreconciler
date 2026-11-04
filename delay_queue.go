@@ -116,20 +116,19 @@ func (q *dq) dequeueIfBefore(t time.Time) []interface{} {
 	var res []interface{}
 	for {
 		n := q.head.next
-		if n != q.tail && n.end.Before(t) {
+		if n != q.tail && !n.end.After(t) {
 			q.head.next = n.next
 			n.next.prev = q.head
 			delete(q.keys, n.key)
 			res = append(res, n.i)
 			n = n.next
 		} else {
-			if len(res) > 0 {
-				q.size -= len(res)
-				select {
-				// If we replaced the head prepare to restart the tick
-				case q.C <- true:
-				default:
-				}
+			q.size -= len(res)
+			// Restart the tick even if nothing was due: the timer that called us is spent, and without
+			// a new one the items left would wait for an earlier item to be scheduled.
+			select {
+			case q.C <- true:
+			default:
 			}
 			return res
 		}
