@@ -143,7 +143,9 @@ func TestSlowKeyDoesNotDelayOthers(t *testing.T) {
 		}
 	}
 	assert.Less(t, lastFast, slow/2, "a fast item waited behind a slow one")
-	assert.GreaterOrEqual(t, finished["slow/b"]-finished["slow/a"], slow, "slow/b ran while slow/a held their key")
+	// Either slow item can take the key first: two workers dequeue them at once.
+	gap := finished["slow/b"] - finished["slow/a"]
+	assert.GreaterOrEqual(t, max(gap, -gap), slow, "the slow items ran at the same time")
 }
 
 func TestReservedQueue(t *testing.T) {
