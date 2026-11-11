@@ -82,8 +82,12 @@ func (q *dq) scheduleOnTime(key string, i interface{}, delay time.Time) error {
 	}
 	q.size += 1
 	q.keys[key] = struct{}{}
-	// Only do things in batch of 100 millis this avoids having 1000s of steps
+	// Only do things in batch of resolution this avoids having 1000s of steps.
+	// Round up so an item never fires before its delay, even if the delay is below the resolution.
 	end := delay.Truncate(q.resolution)
+	if end.Before(delay) {
+		end = end.Add(q.resolution)
+	}
 	n := &qElt{
 		key: key,
 		i:   i,

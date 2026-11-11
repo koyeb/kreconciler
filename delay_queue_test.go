@@ -219,3 +219,17 @@ func TestTimerFiringAtEndTime(t *testing.T) {
 	assert.Equal(t, 1, ticks())
 	assert.Equal(t, 1, q.size)
 }
+
+func TestScheduleRoundsUpToResolution(t *testing.T) {
+	q := newQueue(10, 250*time.Millisecond)
+	start := time.Now().Add(time.Second).Truncate(q.resolution)
+
+	// A delay below the resolution must not be due before it was asked for.
+	require.NoError(t, q.scheduleOnTime("1", "1", start.Add(100*time.Millisecond)))
+	assert.Equal(t, start.Add(q.resolution), q.nextTime())
+	assert.Empty(t, q.dequeueIfBefore(start.Add(100*time.Millisecond)))
+
+	// A due time on a resolution boundary stays as is.
+	require.NoError(t, q.scheduleOnTime("2", "2", start))
+	assert.Equal(t, start, q.nextTime())
+}
